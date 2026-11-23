@@ -2,10 +2,10 @@
 
 Mutter RemoteDesktop 으로 가상 입력을 넣는다. 실행하는 약 8초 동안 실제 키보드·마우스가
 움직이므로 손을 떼고 있어야 한다.
-  Shift+Super+2 → (GNOME 스크린샷 화면) S → 드래그 → Enter
+  Shift+Super+2 → 드래그 → 마우스 놓기
   → 새 파일·클립보드 확인 → Shift+Super+E → 편집 창 확인 → Esc
 
-실행: /usr/bin/python3 tests/e2e_real_input.py
+첫 사용 권한 안내를 한 번 완료한 뒤 실행: /usr/bin/python3 tests/e2e_real_input.py
 테스트가 만든 스크린샷 파일은 끝날 때 지운다. 클립보드에는 테스트 캡처가 남는다.
 """
 
@@ -25,7 +25,7 @@ from gi.repository import Gdk, Gio, GLib, Gtk  # noqa: E402
 from chalkak.util import latest_screenshot  # noqa: E402
 
 RD = "org.gnome.Mutter.RemoteDesktop"
-SHIFT, SUPER, KEY_2, KEY_E, KEY_S, ENTER, ESC = 42, 125, 3, 18, 31, 28, 1  # evdev 키 코드
+SHIFT, SUPER, KEY_2, KEY_E, ESC = 42, 125, 3, 18, 1  # evdev 키 코드
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION)
 
@@ -92,12 +92,8 @@ class Checker(Gtk.Application):
 
     def step_capture(self):
         chord(SHIFT, SUPER, KEY_2)
-        time.sleep(0.9)
-        chord(KEY_S)  # 영역 선택 모드
-        time.sleep(0.15)
+        time.sleep(1.6)  # 포털 스냅샷과 선택 창을 기다린다.
         drag(300, 200)
-        time.sleep(0.3)
-        chord(ENTER)
         GLib.timeout_add(900, self.step_verify_capture)
         return GLib.SOURCE_REMOVE
 

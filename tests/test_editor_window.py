@@ -6,6 +6,9 @@
 
 import os
 import sys
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -15,7 +18,7 @@ import gi
 gi.require_version("Gtk", "4.0")
 gi.require_version("Gdk", "4.0")
 gi.require_version("Adw", "1")
-from gi.repository import Adw, Gdk, Gio, GLib  # noqa: E402
+from gi.repository import Gdk, Gio, GLib  # noqa: E402
 
 from chalkak.app import ChalkakApp  # noqa: E402
 from chalkak.editor import EditorWindow  # noqa: E402
@@ -64,7 +67,10 @@ def run_checks(window):
     c = d.canvas
 
     # 1) 도구 단축키 + 그리기
-    assert d.key(Gdk.KEY_2) and c.tool == "rect"
+    assert c.tool == "rect" and window.tool_buttons["rect"].get_active()
+    assert list(window.tool_buttons)[:2] == ["rect", "arrow"]
+    assert d.key(Gdk.KEY_2) and c.tool == "arrow"
+    assert d.key(Gdk.KEY_1) and c.tool == "rect"
     d.drag(100, 100, 300, 220)
     assert len(c.shapes) == 1 and c.selected is c.shapes[0]
     box = c.shapes[0]
@@ -160,29 +166,190 @@ def run_checks(window):
     assert (out.get_width(), out.get_height()) == (800, 500)
     assert not c.dirty
 
-    # 12) Esc: 선택 해제 → (변경 없으면) 닫기
+    # 12) Esc: 선택 해제 → 저장하고 닫기
     c.selected = c.shapes[0]
     d.key(Gdk.KEY_Escape)
     assert c.selected is None
     return len(png)
 
 
+def check_autosave(app, folder):
+    from gi.repository import GdkPixbuf
+
+    original = folder / "original.png"
+    newer = folder / "newer.png"
+    untouched = folder / "untouched.png"
+    for path, color in ((original, 0x126636ff), (newer, 0x119bbaff), (untouched, 0x239233ff)):
+        pixbuf = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, False, 8, 320, 240)
+        pixbuf.fill(color)
+        pixbuf.savev(str(path), "png", [], [])
+
+    original_bytes = original.read_bytes()
+    newer_bytes = newer.read_bytes()
+    untouched_bytes = untouched.read_bytes()
+    os.utime(original, (100, 100))
+    os.utime(untouched, (200, 200))
+    os.utime(newer, (300, 300))
+    before = set(folder.iterdir())
+
+    window = app.edit(str(untouched))
+    initial = untouched.stat()
+    assert window.save() == str(untouched)
+    with patch("chalkak.editor.copy_png") as clipboard:
+        assert window.copy() == untouched_bytes
+        assert clipboard.call_args.args[1] == untouched_bytes
+    window.close()
+    assert untouched.stat().st_ino == initial.st_ino
+    assert untouched.stat().st_mtime_ns == initial.st_mtime_ns
+
+    window = app.edit(str(original))
+    d = Driver(window)
+    window.set_tool("text")
+    d.drag(20, 30, 20, 30)
+    window._text_view.get_buffer().set_text("텍스트")
+    window._text_view.emit("preedit-changed", "요")
+    assert app.edit(str(folder) + "/./original.png") is window
+    with patch("chalkak.util.os.replace", side_effect=OSError("disk full")):
+        with patch("chalkak.editor.copy_png") as clipboard:
+            assert d.key(Gdk.KEY_s, CTRL)
+            drain_events()
+            clipboard.assert_not_called()
+        assert window in app.get_windows()
+        assert window.canvas.shapes[-1].text == "텍스트요" and window.canvas.dirty
+        window.close()
+        assert window in app.get_windows() and window._toast.get_reveal_child()
+        with patch("chalkak.editor.copy_png") as clipboard:
+            window.copy_and_close()
+            clipboard.assert_not_called()
+        assert set(folder.iterdir()) == before and original.read_bytes() == original_bytes
+
+    window.set_tool("crop")
+    window.canvas.crop_draft = [0, 0, 150, 100]
+    with patch("chalkak.editor.copy_png") as clipboard:
+        assert d.key(Gdk.KEY_c, CTRL)
+    first_version = original.read_bytes()
+    assert first_version == clipboard.call_args.args[1] and first_version != original_bytes
+    result = GdkPixbuf.Pixbuf.new_from_file(str(original))
+    assert (result.get_width(), result.get_height()) == (150, 100)
+    assert window.canvas.crop == (0, 0, 150, 100)
+    window.set_tool("rect")
+    d.drag(60, 60, 130, 90)
+    assert window.save() == str(original) and original.read_bytes() != first_version
+    inode = original.stat().st_ino
+    window.close()
+    assert window not in app.get_windows() and original.stat().st_ino == inode
+    assert original.stat().st_mtime_ns == 100_000_000_000
+    assert newer.read_bytes() == newer_bytes and untouched.read_bytes() == untouched_bytes
+
+    app.last_path = str(original)
+    with patch("chalkak.util.pictures_dir", return_value=str(folder)):
+        app.edit_last()
+    latest_window, = [w for w in app.get_windows() if w is not app.window]
+    assert latest_window.source_path == str(newer)
+    for path, key in ((newer, Gdk.KEY_Return), (untouched, Gdk.KEY_Escape)):
+        window = app.edit(str(path))
+        previous = path.read_bytes()
+        d = Driver(window)
+        d.drag(10, 10, 70, 70)
+        if key == Gdk.KEY_Escape:
+            assert d.key(key) and window.canvas.selected is None
+            assert window in app.get_windows() and path.read_bytes() == previous
+        assert d.key(key)
+        drain_events()
+        assert window not in app.get_windows() and path.read_bytes() != previous
+        assert set(folder.iterdir()) == before
+
+
+def drain_events():
+    context = GLib.MainContext.default()
+    while context.pending():
+        context.iteration(False)
+
+
+def clipboard_png(display):
+    provider = display.get_clipboard().get_content()
+    assert provider and provider.ref_formats().contain_mime_type("image/png")
+    stream = Gio.MemoryOutputStream.new_resizable()
+    results = []
+    provider.write_mime_type_async("image/png", stream, GLib.PRIORITY_DEFAULT, None,
+                                   lambda _, result: results.append(result))
+    while not results:
+        GLib.MainContext.default().iteration(True)
+    assert provider.write_mime_type_finish(results[0])
+    stream.close()
+    return stream.steal_as_bytes().get_data()
+
+
+def check_ctrl_s(app, folder):
+    from gi.repository import GdkPixbuf
+
+    for tool in ("text", "crop"):
+        path = folder / f"shortcut-{tool}.png"
+        background = GdkPixbuf.Pixbuf.new(GdkPixbuf.Colorspace.RGB, True, 8, 320, 240)
+        background.fill(0xffffffff)
+        background.savev(str(path), "png", [], [])
+        original = path.read_bytes()
+        before = set(folder.iterdir())
+        window = app.edit(str(path))
+        driver = Driver(window)
+        display = window.get_display()
+        window.set_tool(tool)
+        if tool == "text":
+            driver.drag(30, 30, 30, 30)
+            window._text_view.get_buffer().set_text("입력")
+            window._text_view.emit("preedit-changed", "중")
+        else:
+            window.canvas.crop_draft = [10, 20, 150, 100]
+        assert driver.key(Gdk.KEY_s, CTRL)
+        drain_events()
+        assert window not in app.get_windows()
+        assert set(folder.iterdir()) == before
+        saved = path.read_bytes()
+        assert saved != original and clipboard_png(display) == saved
+        output = GdkPixbuf.Pixbuf.new_from_file(str(path))
+        if tool == "text":
+            assert window.canvas.shapes[-1].text == "입력중"
+            assert (output.get_width(), output.get_height()) == (320, 240)
+            assert min(output.get_pixels()) < 255
+        else:
+            assert (output.get_width(), output.get_height()) == (150, 100)
+
+    window = app.edit(str(path))
+    driver = Driver(window)
+    driver.drag(10, 10, 100, 70)
+    with patch("chalkak.editor.copy_png", side_effect=OSError("clipboard busy")):
+        assert driver.key(Gdk.KEY_s, CTRL)
+        drain_events()
+        assert window in app.get_windows() and window._toast.get_reveal_child()
+    assert path.read_bytes() != saved and set(folder.iterdir()) == before
+    assert driver.key(Gdk.KEY_s, CTRL)
+    drain_events()
+    assert window not in app.get_windows()
+    assert clipboard_png(display) == path.read_bytes() and set(folder.iterdir()) == before
+
+
 class TestApp(ChalkakApp):
     def __init__(self):
-        Adw.Application.__init__(self, application_id="app.chalkak.Test", flags=Gio.ApplicationFlags.NON_UNIQUE)
-        self.pending = None
-        self.last_path = None
+        super().__init__()
+        self.set_application_id("app.chalkak.Test")
+        self.set_flags(Gio.ApplicationFlags.NON_UNIQUE)
         self.result = 1
 
     def do_activate(self):
-        self.window = EditorWindow(self, make_background(1000, 600), 1.0)
+        source = self.folder / "tools.png"
+        pixbuf = make_background(1000, 600)
+        pixbuf.savev(str(source), "png", [], [])
+        os.utime(source, (1, 1))
+        self.window = EditorWindow(self, pixbuf, 1.0, str(source))
         self.window.present()
         GLib.timeout_add(700, self._run)
 
     def _run(self):
         try:
             size = run_checks(self.window)
-            print(f"OK — 편집 창 동작 13항목 통과 (내보낸 PNG {size} bytes)")
+            check_autosave(self, self.folder)
+            check_ctrl_s(self, self.folder)
+            print(f"OK — 편집 창 동작 및 자동 저장 통과 (내보낸 PNG {size} bytes)")
             self.result = 0
         except Exception:  # noqa: BLE001
             import traceback
@@ -199,5 +366,7 @@ class TestApp(ChalkakApp):
 
 if __name__ == "__main__":
     app = TestApp()
-    app.run([])
+    with TemporaryDirectory() as folder, patch("chalkak.util.screenshots_dir", return_value=folder):
+        app.folder = Path(folder)
+        app.run([])
     sys.exit(app.result)

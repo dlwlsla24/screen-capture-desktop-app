@@ -39,6 +39,13 @@ class WindowTests(unittest.TestCase):
         self.errors = []
         self.root.report_callback_exception = lambda _cls, err, _tb: self.errors.append(err)
         self.image = pattern()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.pictures = Path(temporary.name) / "Pictures" / "Screenshots"
+        self.pictures.mkdir(parents=True)
+        directory = patch.object(system, "screenshots_dir", return_value=str(self.pictures))
+        directory.start()
+        self.addCleanup(directory.stop)
 
     def tearDown(self):
         self.assertEqual(self.errors, [], "an event callback failed")
@@ -93,8 +100,17 @@ class WindowTests(unittest.TestCase):
     def test_capture_preview_opens_latest_selection(self):
         app = WindowsApp(self.root)
         app.hotkeys = SimpleNamespace(labels={"edit": "Shift+Win+E"})
+        expected = self.image.crop((22, 16, 122, 96))
+
+        def verify_saved_before_copy(image):
+            self.assertIsNone(app.preview)
+            with Image.open(app.last_path) as saved:
+                self.assertEqual(saved.size, expected.size)
+                self.assertEqual(saved.tobytes(), expected.tobytes())
+            self.assertEqual(image.tobytes(), expected.tobytes())
+
         with patch.object(system, "grab_screen", return_value=(self.image, (0, 0, *self.image.size))), \
-             patch.object(system, "copy_image") as copy:
+             patch.object(system, "copy_image", side_effect=verify_saved_before_copy) as copy:
             app.capture()
             overlay = app.overlay
             ready = tk.BooleanVar(self.root)
@@ -102,16 +118,168 @@ class WindowTests(unittest.TestCase):
             self.root.wait_variable(ready)
             overlay.canvas.event_generate("<ButtonPress-1>", x=22, y=16)
             overlay.canvas.event_generate("<ButtonRelease-1>", x=122, y=96)
-            copy.assert_called_once_with(app.last_image)
-            self.assertEqual(app.last_image.tobytes(), self.image.crop((22, 16, 122, 96)).tobytes())
+            copy.assert_called_once()
             self.assertIsNone(app.overlay)
             self.root.update()
             body = app.preview.window.winfo_children()[0]
             body.event_generate("<Button-1>", x=4, y=4)
             self.assertIsNone(app.preview)
-            self.assertEqual(app.editor.canvas.export().tobytes(), app.last_image.tobytes())
+            self.assertEqual(app.editor.canvas.export().tobytes(), expected.tobytes())
+            self.assertEqual(app.editor.saved_path, app.last_path)
             app.editor.close()
             self.assertIsNone(app.editor)
+
+    def test_default_shortcuts_and_persisted_pixels(self):
+        editor = self.editor()
+        canvas = editor.canvas
+        self.assertEqual(list(editor.tool_buttons)[:2], ["rect", "arrow"])
+        self.assertEqual(canvas.tool, "rect")
+        canvas.widget.focus_force()
+        canvas.widget.event_generate("<KeyPress-2>")
+        self.assertEqual(canvas.tool, "arrow")
+        canvas.widget.event_generate("<KeyPress-1>")
+        self.assertEqual(canvas.tool, "rect")
+        self.gesture(editor, (20, 30), (140, 90))
+        expected = canvas.export()
+        with patch.object(system, "copy_image") as copy:
+            canvas.widget.event_generate("<Control-c>")
+            self.assertEqual(copy.call_args.args[0].tobytes(), expected.tobytes())
+            self.assertTrue(editor.winfo_exists())
+            first = Path(editor.saved_path)
+            canvas.widget.event_generate("<Return>")
+            self.assertFalse(editor.winfo_exists())
+        self.assertEqual(list(self.pictures.glob("*.png")), [first])
+        with Image.open(first) as result:
+            self.assertEqual(result.tobytes(), expected.tobytes())
+        self.assertEqual(self.image.tobytes(), pattern().tobytes())
+
+    def test_escape_persists_changed_edit_after_save(self):
+        editor = self.editor()
+        self.gesture(editor, (10, 10), (80, 80))
+        first = Path(editor.save())
+        first_bytes = first.read_bytes()
+        self.gesture(editor, (110, 110), (170, 150))
+        expected = editor.canvas.export()
+        editor.canvas.widget.focus_force()
+        editor.canvas.widget.event_generate("<Escape>")  # deselect
+        editor.canvas.widget.event_generate("<Escape>")  # close
+        self.assertFalse(editor.winfo_exists())
+        self.assertNotEqual(first.read_bytes(), first_bytes)
+        self.assertEqual(Path(editor.saved_path), first)
+        with Image.open(editor.saved_path) as result:
+            self.assertEqual(result.tobytes(), expected.tobytes())
+
+    def test_failed_tray_exit_can_retry_all_open_editors(self):
+        app = WindowsApp(self.root)
+        app.hotkeys = SimpleNamespace(labels={})
+        with patch.object(system, "copy_image"):
+            for image in (self.image, self.image.crop((1, 2, 60, 70))):
+                app.captured(image)
+                app.edit_last()
+        self.assertEqual(len(app.open_editors), 2)
+        first, second = app.open_editors
+        self.root.update()
+        self.gesture(first, (20, 20), (90, 80))
+        expected = first.canvas.export()
+        before_failure = {p: p.read_bytes() for p in self.pictures.iterdir()}
+        with patch.object(system.os, "replace", side_effect=PermissionError("denied")), \
+             patch.object(system, "copy_image") as copy, patch.object(self.root, "after"):
+            first.copy_and_close()
+            copy.assert_not_called()
+            app.events.put("exit")
+            app.poll()
+        self.assertEqual({p: p.read_bytes() for p in self.pictures.iterdir()}, before_failure)
+        self.assertIn("저장하지 못", first._toast.cget("text"))
+        self.assertFalse(app.closing)
+        self.assertEqual(app.open_editors, [first, second])
+        self.assertTrue(first.winfo_exists())
+        app.events.put("exit")
+        app.poll()
+        self.assertTrue(app.closing)
+        self.assertEqual(app.open_editors, [])
+        self.assertEqual(len(list(self.pictures.glob("*.png"))), 2)
+        with Image.open(first.saved_path) as result:
+            self.assertEqual(result.tobytes(), expected.tobytes())
+        with Image.open(second.saved_path) as result:
+            self.assertEqual(result.tobytes(), self.image.crop((1, 2, 60, 70)).tobytes())
+
+    def test_two_captures_save_in_place_and_reopen_latest_pixels(self):
+        app = WindowsApp(self.root)
+        app.hotkeys = SimpleNamespace(labels={})
+        with patch.object(system, "copy_image") as copy:
+            app.captured(self.image)
+            app.edit_last()
+            first = app.editor
+            app.captured(self.image)
+            app.edit_last()
+            second = app.editor
+            self.root.update()
+            first_file, second_file = Path(first.saved_path), Path(second.saved_path)
+            self.assertNotEqual(first_file, second_file)
+            self.gesture(second, (30, 40), (150, 130))
+            expected = second.canvas.export()
+            self.assertNotEqual(expected.tobytes(), self.image.tobytes())
+            copy.reset_mock()
+            second.canvas.widget.focus_force()
+            second.canvas.widget.event_generate("<Control-s>")
+            copy.assert_called_once()
+            copied = copy.call_args.args[0]
+            self.assertEqual(copied.tobytes(), expected.tobytes())
+            with Image.open(second_file) as saved:
+                self.assertEqual((saved.size, saved.tobytes()), (copied.size, copied.tobytes()))
+            self.assertFalse(second.winfo_exists())
+            self.assertIsNone(app.editor)
+            app.edit_last()
+            reopened = app.editor
+            self.assertEqual(reopened.saved_path, str(second_file))
+            self.assertEqual(reopened.canvas.base.tobytes(), expected.tobytes())
+            self.gesture(first, (10, 10), (100, 60))
+            earlier_edit = first.canvas.export()
+            first.copy_and_close()
+            self.assertEqual(copy.call_args.args[0].tobytes(), earlier_edit.tobytes())
+            self.assertIs(app.editor, reopened)
+            with Image.open(first_file) as saved:
+                self.assertEqual(saved.tobytes(), earlier_edit.tobytes())
+            self.assertEqual(set(self.pictures.iterdir()), {first_file, second_file})
+            app.editor.close()
+
+    def test_ctrl_s_clipboard_failure_keeps_editor_open_for_retry(self):
+        editor = self.editor()
+        self.gesture(editor, (20, 30), (140, 90))
+        expected = editor.canvas.export()
+        widget = editor.canvas.widget
+        widget.focus_force()
+        with patch.object(system, "copy_image", side_effect=[OSError("clipboard busy"), None]) as copy:
+            widget.event_generate("<Control-s>")
+            copy.assert_called_once()
+            self.assertTrue(editor.winfo_exists())
+            saved_path = Path(editor.saved_path)
+            with Image.open(saved_path) as saved:
+                self.assertEqual(saved.tobytes(), expected.tobytes())
+            widget.event_generate("<Control-s>")
+            self.assertEqual(copy.call_count, 2)
+            self.assertEqual(copy.call_args.args[0].tobytes(), expected.tobytes())
+            self.assertFalse(editor.winfo_exists())
+        self.assertEqual(list(self.pictures.iterdir()), [saved_path])
+
+    def test_capture_save_failure_preserves_previous_identity(self):
+        app = WindowsApp(self.root)
+        app.hotkeys = SimpleNamespace(labels={})
+        with patch.object(system, "copy_image") as copy:
+            app.captured(self.image)
+            app.edit_last()
+            previous = app.editor
+            copy.reset_mock()
+            with patch.object(Image.Image, "save", side_effect=OSError("disk full")), \
+                 patch("chalkak.win.app.messagebox.showerror") as error:
+                app.captured(self.image.crop((1, 1, 50, 50)))
+            error.assert_called_once()
+            copy.assert_not_called()
+            self.assertIsNone(app.preview)
+            self.assertIs(app.editor, previous)
+            self.assertEqual(previous.saved_path, app.last_path)
+            self.assertEqual(list(self.pictures.iterdir()), [Path(app.last_path)])
+            previous.close()
 
     def test_draw_tools(self):
         for tool in ("arrow", "rect", "ellipse", "triangle", "pen", "blur"):

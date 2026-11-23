@@ -12,12 +12,12 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .canvas import PAD, PAD_BOTTOM, PAD_TOP, Canvas
 from .icons import Dot, Icon
-from .util import APP_NAME, copy_png, hex_rgb, new_save_path
+from .util import APP_NAME, copy_png, hex_rgb, replace_capture_png, save_png
 
 # (도구, 이름, 글자 단축키)
 TOOLS = [
-    ("arrow", "화살표", "A"),
     ("rect", "네모", "R"),
+    ("arrow", "화살표", "A"),
     ("ellipse", "동그라미", "O"),
     ("triangle", "세모", "G"),
     ("pen", "펜", "P"),
@@ -34,9 +34,9 @@ TEXT_PAD_X, TEXT_PAD_Y = 7, 4  # 입력 상자 안쪽 여백 + 테두리
 class EditorWindow(Adw.ApplicationWindow):
     def __init__(self, app, pixbuf, ratio=1.0, source_path=None):
         super().__init__(application=app, title=f"{APP_NAME} 편집")
-        self.source_path = source_path
+        self.source_path = os.path.realpath(source_path) if source_path is not None else None
         self._syncing = False
-        self._previous_tool = "arrow"
+        self._previous_tool = TOOLS[0][0]
         self._text_editing = None
         self._preedit = ""
         self._text_view = self._build_text_entry()
@@ -69,6 +69,8 @@ class EditorWindow(Adw.ApplicationWindow):
         self.canvas.grab_focus()
 
     def _closing(self, _window):
+        if self._save_current() is None:
+            return True
         if self._toast_timer:
             GLib.source_remove(self._toast_timer)
             self._toast_timer = 0
@@ -112,10 +114,10 @@ class EditorWindow(Adw.ApplicationWindow):
         done = Gtk.Button(label="복사하고 닫기")
         done.add_css_class("suggested-action")
         done.set_focusable(False)
-        done.set_tooltip_text("결과를 클립보드에 복사하고 창을 닫습니다  (Enter)")
+        done.set_tooltip_text("PNG로 저장하고 클립보드에 복사한 뒤 창을 닫습니다 (Ctrl+S 또는 Enter)")
         done.connect("clicked", lambda *_: self.copy_and_close())
         header.pack_end(done)
-        header.pack_end(self._icon_button("document-save-symbolic", "사진 폴더에 저장 (Ctrl+S)", self.save))
+        header.pack_end(self._icon_button("document-save-symbolic", "사진 폴더에 저장", self.save))
         return header
 
     @staticmethod
@@ -380,6 +382,11 @@ class EditorWindow(Adw.ApplicationWindow):
         shift = bool(state & Gdk.ModifierType.SHIFT_MASK)
         enter = keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter)
 
+        key = Gdk.keyval_to_lower(keyval)
+        if ctrl and key == Gdk.KEY_s:
+            self.copy_and_close()
+            return True
+
         if canvas.editing:
             if keyval == Gdk.KEY_Escape:
                 canvas.commit_text(cancel=True)
@@ -389,7 +396,6 @@ class EditorWindow(Adw.ApplicationWindow):
                 return True
             return False
 
-        key = Gdk.keyval_to_lower(keyval)
         if ctrl:
             if key == Gdk.KEY_z:
                 canvas.redo() if shift else canvas.undo()
@@ -397,8 +403,6 @@ class EditorWindow(Adw.ApplicationWindow):
                 canvas.redo()
             elif key == Gdk.KEY_c:
                 self.copy()
-            elif key == Gdk.KEY_s:
-                self.save()
             else:
                 return False
             return True
@@ -412,7 +416,7 @@ class EditorWindow(Adw.ApplicationWindow):
         if keyval == Gdk.KEY_Escape:
             if canvas.tool == "crop":
                 self.finish_crop(apply=False)
-            elif not canvas.deselect() and not canvas.dirty:
+            elif not canvas.deselect():
                 self.close()
             return True
         if keyval in (Gdk.KEY_Delete, Gdk.KEY_BackSpace):
@@ -427,28 +431,45 @@ class EditorWindow(Adw.ApplicationWindow):
         return False
 
     # ── 내보내기 ──────────────────────────────────────────────────────────
-    def copy(self, toast=True):
-        png = self.canvas.render_png()
-        copy_png(self.get_display(), png)
+    def _save_current(self):
+        try:
+            if self.canvas.tool == "crop":
+                self.finish_crop(apply=True)
+            self.canvas.commit_text()
+            if self.source_path is None:
+                self.source_path = save_png(self.canvas.render_png())
+            elif self.canvas.dirty:
+                replace_capture_png(self.source_path, self.canvas.render_png())
+        except Exception as err:
+            # close-request must veto closing even when rendering itself fails.
+            self.toast(f"저장하지 못했어요: {err}", seconds=5)
+            return None
         self.canvas.dirty = False
+        return self.source_path
+
+    def copy(self, toast=True):
+        path = self._save_current()
+        if path is None:
+            return None
+        try:
+            with open(path, "rb") as source:
+                png = source.read()
+            copy_png(self.get_display(), png)
+        except (OSError, GLib.Error) as err:
+            self.toast(f"복사하지 못했어요: {err}", seconds=5)
+            return None
         if toast:
-            self.toast("클립보드에 복사했어요")
+            self.toast("사진 폴더에 저장하고 클립보드에 복사했어요")
         return png
 
     def copy_and_close(self):
-        self.copy(toast=False)
-        GLib.idle_add(self.close)
+        if self.copy(toast=False) is not None:
+            GLib.idle_add(self.close)
 
     def save(self):
-        png = self.canvas.render_png()
-        path = new_save_path()
-        try:
-            with open(path, "wb") as handle:
-                handle.write(png)
-        except OSError as err:
-            self.toast(f"저장하지 못했어요: {err.strerror}", seconds=4)
+        path = self._save_current()
+        if path is None:
             return None
-        self.canvas.dirty = False
         self.toast(f"저장했어요 · {os.path.basename(path)}", "폴더 열기", lambda: self._reveal(path), seconds=5)
         return path
 

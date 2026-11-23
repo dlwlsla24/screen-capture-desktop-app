@@ -5,8 +5,10 @@ Windows 가 없는 곳에서도 테스트할 수 있게 하기 위해서다.
 """
 
 import os
+import tempfile
 import sys
 import time
+import uuid
 
 IS_WINDOWS = sys.platform == "win32"
 APP_NAME = "심플찰칵"
@@ -58,12 +60,36 @@ def screenshots_dir():
 
 def new_save_path():
     stamp = time.strftime("%Y-%m-%d %H-%M-%S")
-    base = os.path.join(screenshots_dir(), f"{APP_NAME} {stamp}")
-    path, n = base + ".png", 1
-    while os.path.exists(path):
-        n += 1
-        path = f"{base} ({n}).png"
+    return os.path.join(screenshots_dir(), f"{APP_NAME} {stamp} {uuid.uuid4().hex}.png")
+
+
+def save_png(image):
+    while True:
+        path = new_save_path()
+        try:
+            output = open(path, "xb")
+        except FileExistsError:
+            continue
+        break
+    try:
+        with output:
+            image.save(output, "PNG")
+    except Exception:
+        os.remove(path)
+        raise
     return path
+
+
+def overwrite_png(image, path):
+    output = tempfile.NamedTemporaryFile(dir=os.path.dirname(path), delete=False)
+    temporary = output.name
+    try:
+        with output:
+            image.save(output, "PNG")
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.remove(temporary)
 
 
 def reveal(path):

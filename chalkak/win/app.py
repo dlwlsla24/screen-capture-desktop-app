@@ -25,8 +25,9 @@ class WindowsApp:
     def __init__(self, root):
         self.root = root
         self.events = queue.Queue()
-        self.last_image = None
+        self.last_path = None
         self.editor = None
+        self.open_editors = []
         self.overlay = None
         self.preview = None
         self.icon = None
@@ -90,6 +91,10 @@ class WindowsApp:
             while not self.events.empty():
                 event = self.events.get_nowait()
                 if event == "exit":
+                    for editor in self.open_editors.copy():
+                        if not editor.close():
+                            system.bring_to_front(editor)
+                            return
                     self.closing = True
                     self.root.quit()
                     return
@@ -126,24 +131,42 @@ class WindowsApp:
 
     def captured(self, image):
         self.overlay = None
-        self.last_image = image
+        try:
+            path = system.save_png(image)
+        except OSError as err:
+            messagebox.showerror(system.APP_NAME, f"캡처를 저장하지 못했어요: {err}", parent=self.root)
+            return
+        self.last_path = path
         self.editor = None  # Earlier open editors keep their own image and edits.
-        system.copy_image(image)
-        self.preview = Toast(self.root, image, self.edit_last, edit_shortcut=self.hotkeys.labels.get("edit"))
+        try:
+            system.copy_image(image)
+            status = "저장하고 복사했어요"
+        except OSError:
+            status = "PNG 저장 완료 · 복사 실패"
+        self.preview = Toast(self.root, image, self.edit_last,
+                             edit_shortcut=self.hotkeys.labels.get("edit"), status=status)
 
     def edit_last(self):
         if self.overlay:
             return
         self.dismiss_preview()
-        if self.last_image is None:
+        if self.last_path is None:
             messagebox.showinfo(system.APP_NAME, "먼저 영역을 캡처하세요.", parent=self.root)
         elif self.editor is None:
-            self.editor = EditorWindow(self.root, self.last_image, self.editor_closed)
+            try:
+                with Image.open(self.last_path) as saved:
+                    image = saved.convert("RGB")
+            except OSError as err:
+                messagebox.showerror(system.APP_NAME, f"캡처를 열지 못했어요: {err}", parent=self.root)
+                return
+            self.editor = EditorWindow(self.root, image, self.editor_closed, saved_path=self.last_path)
+            self.open_editors.append(self.editor)
         else:
             self.editor.deiconify()
             system.bring_to_front(self.editor)
 
     def editor_closed(self, editor):
+        self.open_editors.remove(editor)
         if editor is self.editor:
             self.editor = None
 
