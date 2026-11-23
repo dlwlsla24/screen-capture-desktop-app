@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 찰칵 제거: install.sh 가 만든 것을 전부 되돌린다.
+# 심플찰칵 제거: install.sh 가 만든 것을 전부 되돌린다.
 set -euo pipefail
 
 APP_ID="app.chalkak.Chalkak"
@@ -46,4 +46,4 @@ update-desktop-database "$DATA/applications" >/dev/null 2>&1 || true
 gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
   --method org.freedesktop.DBus.ReloadConfig >/dev/null 2>&1 || true
 
-echo "찰칵을 제거했습니다. (저장해 둔 스크린샷 파일은 그대로 둡니다)"
+echo "심플찰칵을 제거했습니다. (저장해 둔 스크린샷 파일은 그대로 둡니다)"

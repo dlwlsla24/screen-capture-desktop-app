@@ -170,9 +170,8 @@ def run_checks(window):
 class TestApp(ChalkakApp):
     def __init__(self):
         Adw.Application.__init__(self, application_id="app.chalkak.Test", flags=Gio.ApplicationFlags.NON_UNIQUE)
-        self.session = None
+        self.pending = None
         self.last_path = None
-        self.ratios = {}
         self.result = 1
 
     def do_activate(self):

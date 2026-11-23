@@ -14,11 +14,11 @@ gi.require_version("Graphene", "1.0")
 from gi.repository import Gdk, GdkPixbuf, GLib, Graphene  # noqa: E402
 
 APP_ID = "app.chalkak.Chalkak"
-APP_NAME = "찰칵"
+APP_NAME = "심플찰칵"
 
 
 def log(*parts):
-    """journalctl --user -t chalkak 로 볼 수 있는 간단한 동작 기록."""
+    """journalctl --user -t app.chalkak.Chalkak 로 볼 수 있는 간단한 동작 기록."""
     print(time.strftime("%H:%M:%S") + f".{int(time.time() * 1000) % 1000:03d}", *parts, file=sys.stderr, flush=True)
 
 
@@ -43,12 +43,6 @@ def hex_rgb(value):
 
 
 # ── 경로 ───────────────────────────────────────────────────────────────────
-def cache_dir():
-    path = os.path.join(GLib.get_user_cache_dir(), "chalkak")
-    os.makedirs(path, exist_ok=True)
-    return path
-
-
 def pictures_dir():
     return GLib.get_user_special_dir(GLib.UserDirectory.DIRECTORY_PICTURES) or os.path.expanduser("~")
 
@@ -60,9 +54,9 @@ def screenshots_dir():
 
 
 def new_save_path():
-    """~/Pictures/Screenshots/찰칵 2026-11-23 14-30-12.png (겹치면 번호를 붙인다)."""
+    """~/Pictures/Screenshots/심플찰칵 2026-11-23 14-30-12.png (겹치면 번호를 붙인다)."""
     stamp = time.strftime("%Y-%m-%d %H-%M-%S")
-    base = os.path.join(screenshots_dir(), f"찰칵 {stamp}")
+    base = os.path.join(screenshots_dir(), f"심플찰칵 {stamp}")
     path, n = base + ".png", 1
     while os.path.exists(path):
         n += 1
@@ -70,18 +64,26 @@ def new_save_path():
     return path
 
 
-def prune_cache(keep=12):
-    """캐시에 최근 캡처 몇 장만 남긴다(알림의 '편집' 버튼용)."""
-    folder = cache_dir()
-    files = sorted(
-        (f for f in os.listdir(folder) if f.startswith("capture-") and f.endswith(".png")),
-        reverse=True,
-    )
-    for name in files[keep:]:
+def latest_screenshot():
+    """스크린샷 폴더에서 가장 최근 PNG. (Print 키로 찍은 것도 포함된다.)"""
+    folders = {screenshots_dir(), os.path.join(pictures_dir(), "스크린샷")}
+    newest, newest_time = None, 0.0
+    for folder in folders:
         try:
-            os.remove(os.path.join(folder, name))
+            names = os.listdir(folder)
         except OSError:
-            pass
+            continue
+        for name in names:
+            if not name.lower().endswith(".png"):
+                continue
+            path = os.path.join(folder, name)
+            try:
+                modified = os.path.getmtime(path)
+            except OSError:
+                continue
+            if modified > newest_time:
+                newest, newest_time = path, modified
+    return newest
 
 
 # ── 이미지 ─────────────────────────────────────────────────────────────────
@@ -90,13 +92,6 @@ def texture_from_pixbuf(pixbuf):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         return Gdk.Texture.new_for_pixbuf(pixbuf)
-
-
-def pixbuf_to_png(pixbuf):
-    ok, data = pixbuf.save_to_bufferv("png", ["compression"], ["3"])
-    if not ok:
-        raise RuntimeError("PNG 인코딩 실패")
-    return bytes(data)
 
 
 def load_pixbuf(path):
