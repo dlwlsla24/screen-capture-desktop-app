@@ -101,8 +101,9 @@ chalkak/
   app.py       백그라운드 앱. D-Bus 액션(capture, edit-last, edit)을 받는다
   capture.py   캡처 요청 (xdg-desktop-portal Screenshot, interactive=true → GNOME 스크린샷 화면)
   editor.py    편집 창 (도구 막대, 색·굵기 막대, 글자 입력, 키보드)
-  canvas.py    캔버스 (그리기·옮기기·크기조절·자르기·실행취소·PNG 내보내기)
-  shapes.py    도형 모델과 그리기, 히트 테스트
+  core.py      두 운영체제가 공유하는 도형 모델, 마우스 편집, 자르기, 실행 취소
+  canvas.py    GTK 캔버스와 PNG 내보내기
+  shapes.py    GTK 도형 렌더링
   icons.py     도구 아이콘 (코드로 직접 그림)
 ```
 

@@ -169,15 +169,18 @@ def _draw_stroked(image, shape, scale, origin, quality):
     image.paste(layer, (x0, y0), layer)
 
 
-def _draw_blur(image, shape, scale, origin):
+def _draw_blur(image, base, shape, scale, origin):
     bx, by, bw, bh = shape.bounds()
-    x0 = max(0, round((bx - origin[0]) * scale))
-    y0 = max(0, round((by - origin[1]) * scale))
-    x1 = min(image.width, round((bx + bw - origin[0]) * scale))
-    y1 = min(image.height, round((by + bh - origin[1]) * scale))
-    if x1 - x0 < 2 or y1 - y0 < 2:
+    left, top = max(0, round(bx)), max(0, round(by))
+    right, bottom = min(base.width, round(bx + bw)), min(base.height, round(by + bh))
+    x0, y0 = round((left - origin[0]) * scale), round((top - origin[1]) * scale)
+    x1, y1 = round((right - origin[0]) * scale), round((bottom - origin[1]) * scale)
+    if max(0, x0) >= min(image.width, x1) or max(0, y0) >= min(image.height, y1):
         return
-    region = image.crop((x0, y0, x1, y1)).filter(ImageFilter.GaussianBlur(max(1.0, shape.blur_radius() * scale)))
+    # Filter the same source pixels even when the crop clips a blur at its edge.
+    region = base.crop((left, top, right, bottom)).filter(ImageFilter.GaussianBlur(shape.blur_radius()))
+    if region.size != (x1 - x0, y1 - y0):
+        region = region.resize((x1 - x0, y1 - y0), Image.Resampling.BILINEAR)
     image.paste(region, (x0, y0))
 
 
@@ -197,7 +200,7 @@ def render_scene(base, items, view, scale=1.0, quality=3, scaled_base=None):
     origin = (view[0], view[1])
     for shape in items:
         if shape.kind == "blur":
-            _draw_blur(image, shape, scale, origin)
+            _draw_blur(image, base, shape, scale, origin)
         elif shape.kind == "text":
             _draw_text(image, shape, scale, origin)
         else:

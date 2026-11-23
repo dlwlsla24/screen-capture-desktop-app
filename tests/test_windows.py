@@ -9,11 +9,13 @@ import tkinter as tk
 import unittest
 from pathlib import Path
 from tkinter import font as tkfont
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from PIL import Image, ImageChops, ImageDraw, ImageGrab
 
 from chalkak.win import system
+from chalkak.win.app import WindowsApp
 from chalkak.win.editor import EditorWindow
 from chalkak.win.overlay import SelectionOverlay
 
@@ -88,6 +90,29 @@ class WindowTests(unittest.TestCase):
         overlay.cancel()
         self.assertEqual(cancelled, [True])
 
+    def test_capture_preview_opens_latest_selection(self):
+        app = WindowsApp(self.root)
+        app.hotkeys = SimpleNamespace(labels={"edit": "Shift+Win+E"})
+        with patch.object(system, "grab_screen", return_value=(self.image, (0, 0, *self.image.size))), \
+             patch.object(system, "copy_image") as copy:
+            app.capture()
+            overlay = app.overlay
+            ready = tk.BooleanVar(self.root)
+            overlay.window.after(15, lambda: ready.set(True))
+            self.root.wait_variable(ready)
+            overlay.canvas.event_generate("<ButtonPress-1>", x=22, y=16)
+            overlay.canvas.event_generate("<ButtonRelease-1>", x=122, y=96)
+            copy.assert_called_once_with(app.last_image)
+            self.assertEqual(app.last_image.tobytes(), self.image.crop((22, 16, 122, 96)).tobytes())
+            self.assertIsNone(app.overlay)
+            self.root.update()
+            body = app.preview.window.winfo_children()[0]
+            body.event_generate("<Button-1>", x=4, y=4)
+            self.assertIsNone(app.preview)
+            self.assertEqual(app.editor.canvas.export().tobytes(), app.last_image.tobytes())
+            app.editor.close()
+            self.assertIsNone(app.editor)
+
     def test_draw_tools(self):
         for tool in ("arrow", "rect", "ellipse", "triangle", "pen", "blur"):
             with self.subTest(tool=tool):
@@ -107,6 +132,18 @@ class WindowTests(unittest.TestCase):
                     lo, hi = channel.getextrema()
                     self.assertLess(hi - lo, 16)
                 editor.close()
+
+    def test_crop_preserves_last_column_of_blur(self):
+        editor = self.editor()
+        canvas = editor.canvas
+        editor.set_tool("blur")
+        self.gesture(editor, (30, 40), (180, 130))
+        full = canvas.export()
+        self.assertNotEqual(full.getpixel((179, 90)), self.image.getpixel((179, 90)))
+        editor.set_tool("crop")
+        self.gesture(editor, (0, 0), (179, 50))
+        editor.finish_crop(True)
+        self.assertEqual(canvas.export().tobytes(), full.crop((179, 50, 240, 180)).tobytes())
 
     def test_shape_edit_crop_save_and_history(self):
         editor = self.editor()
