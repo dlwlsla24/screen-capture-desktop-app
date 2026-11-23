@@ -1,0 +1,68 @@
+name: Windows executable
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+
+      - name: Install dependencies
+        run: python -m pip install -r windows/requirements.txt "pyinstaller>=6,<7"
+
+      - name: Run Windows tests
+        run: |
+          if (!(Test-Path tests/test_windows.py -PathType Leaf)) { throw 'Missing tests/test_windows.py' }
+          python -m unittest discover -s tests -p test_windows.py
+
+      - name: Build standalone executable
+        run: >-
+          python -m PyInstaller --clean --noconfirm --onefile --windowed
+          --name SimpleChalkak --paths . --hidden-import pystray._win32
+          windows/simple_chalkak.pyw
+
+      - name: Smoke test frozen startup
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path dist/SimpleChalkak.exe).Path
+          $app = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
+          try {
+            $deadline = [DateTime]::UtcNow.AddSeconds(60)
+            do {
+              if ($app.HasExited) { throw "App exited during startup ($($app.ExitCode))" }
+              $mutex = $null
+              if ([Threading.Mutex]::TryOpenExisting('SimpleChalkak.SingleInstance', [ref]$mutex)) {
+                $mutex.Dispose()
+                break
+              }
+              if ([DateTime]::UtcNow -ge $deadline) { throw 'App did not initialize its single-instance mutex' }
+              Start-Sleep -Milliseconds 250
+            } while ($true)
+
+            $second = Start-Process -FilePath $exe -WorkingDirectory $env:RUNNER_TEMP -PassThru
+            if (!$second.WaitForExit(30000)) {
+              $second.Kill($true)
+              throw 'Second launch did not exit'
+            }
+            if ($second.ExitCode -ne 0 -or $app.HasExited) { throw 'Frozen startup check failed' }
+            $windows = Get-Process -Name SimpleChalkak | Where-Object { $_.MainWindowHandle -ne 0 }
+            if ($windows) { throw "Unexpected window during tray startup: $($windows.MainWindowTitle)" }
+          } finally {
+            if (!$app.HasExited) { $app.Kill($true) }
+          }
+
+      - name: Upload Windows executable
+        uses: actions/upload-artifact@v4
+        with:
+          name: SimpleChalkak-Windows-x64
+          path: dist/SimpleChalkak.exe
+          if-no-files-found: error

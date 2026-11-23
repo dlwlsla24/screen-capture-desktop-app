@@ -1,13 +1,40 @@
-# 심플찰칵 — 리눅스용 초간단 스크린샷 + 바로 편집
+# 심플찰칵 — Windows · 리눅스 스크린샷 + 바로 편집
 
-`Shift + Win + 2` → 드래그 → `Enter` → **복사 끝.**
-고칠 게 있으면 `Shift + Win + E` 로 편집 창을 엽니다.
+`Shift + Win + 2`로 영역을 선택해 클립보드에 복사하고, `Shift + Win + E`로 방금 찍은 화면을 편집합니다.
+
+## Windows에서 실행
+
+1. GitHub에 로그인하고 [Windows executable 빌드 목록](https://github.com/dlwlsla24/screen-capture-desktop-app/actions/workflows/windows.yml)에서 원하는 브랜치의 성공한 실행을 엽니다.
+2. 실행 요약 아래 **Artifacts → SimpleChalkak-Windows-x64**를 눌러 ZIP을 받습니다.
+3. ZIP을 풀고 `SimpleChalkak.exe`를 실행합니다. Python과 필요한 라이브러리가 실행 파일에 들어 있습니다.
+
+캡처 단축키를 누르고 드래그한 뒤 마우스를 놓으면 선택 영역이 복사됩니다. `Ctrl + V`로 붙여 넣거나 오른쪽 아래 미리보기를 눌러 편집하세요. 캡처를 취소하려면 `Esc`를 누릅니다.
+
+작업 표시줄 알림 영역에서 심플찰칵 아이콘을 우클릭하면 현재 등록된 단축키를 볼 수 있습니다. Windows가 기본 조합을 이미 쓰고 있으면 앱은 `Ctrl + Alt + 2`와 `Ctrl + Alt + E`를 각각 시도합니다. 트레이 메뉴에서 직접 캡처하거나 **로그인할 때 자동 실행**을 켜고 끌 수도 있습니다.
+
+### Windows에서 소스로 실행하거나 exe 만들기
+
+Tkinter가 포함된 Windows용 Python 3.12(x64)를 설치하고 저장소 루트에서 PowerShell을 엽니다.
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\python.exe -m pip install -r windows/requirements.txt
+.\.venv\Scripts\python.exe -m chalkak
+```
+
+가상 환경을 이미 활성화했다면 `python -m chalkak`으로 실행합니다. 같은 환경에서 아래 명령을 실행하면 Windows 테스트를 돌리고 `dist\SimpleChalkak.exe`를 생성합니다.
+
+```powershell
+.\.venv\Scripts\python.exe -m unittest discover -s tests -p test_windows.py
+.\.venv\Scripts\python.exe -m pip install "pyinstaller>=6,<7"
+.\.venv\Scripts\python.exe -m PyInstaller --clean --noconfirm --onefile --windowed --name SimpleChalkak --paths . --hidden-import pystray._win32 windows/simple_chalkak.pyw
+```
+
+## 리눅스(GNOME)에서 설치
 
 캡처 화면은 `Print` 키를 눌렀을 때 나오는 GNOME 기본 스크린샷 화면 그대로입니다. 여기에 "찍은 뒤 바로 화살표·도형·글자·블러·자르기"를 붙인 앱입니다.
 
 GNOME(Wayland) 데스크탑용. Ubuntu 26.04 · GNOME 50 · 4K 모니터 2대에서 검증했습니다.
-
-## 설치
 
 ```bash
 git clone https://github.com/dlwlsla24/screen-capture-desktop-app.git
@@ -22,7 +49,7 @@ cd screen-capture-desktop-app
 
 필요한 패키지(`python3-gi`, GTK 4.14+, libadwaita, `xdg-desktop-portal-gnome`)는 Ubuntu 기본 설치에 들어 있습니다. 빠져 있으면 설치 스크립트가 필요한 `apt` 명령을 알려 주고 멈춥니다.
 
-## 쓰는 법
+## 리눅스에서 쓰는 법
 
 | 하고 싶은 것 | 방법 |
 |---|---|
@@ -55,7 +82,7 @@ cd screen-capture-desktop-app
 - `Ctrl+Z` 실행 취소 · `Ctrl+Shift+Z` 다시 실행 · `Delete` 선택 도형 삭제
 - **`Enter` = 복사하고 닫기** · `Ctrl+C` 복사만 · `Ctrl+S` 저장(`심플찰칵 날짜 시각.png`, 원본은 그대로) · `Esc` 선택 해제/닫기
 
-## 단축키 바꾸기
+## 리눅스 단축키 바꾸기
 
 ```bash
 CHALKAK_CAPTURE_KEY='<Ctrl><Alt>a' CHALKAK_EDIT_KEY='<Ctrl><Alt>e' ./install.sh
@@ -65,7 +92,7 @@ CHALKAK_CAPTURE_KEY='<Ctrl><Alt>a' CHALKAK_EDIT_KEY='<Ctrl><Alt>e' ./install.sh
 
 > `Shift+Win+2` 는 원래 Ubuntu Dock 의 "독 2번째 앱 새 창 열기"였습니다. 설치할 때 그 한 개를 비워 둡니다(제거하면 복구).
 
-## 구조
+## 리눅스 앱 구조
 
 화면에 보이는 이름은 "심플찰칵"이고, 폴더·명령·앱 ID 같은 내부 이름은 `chalkak` 입니다.
 
@@ -74,8 +101,9 @@ chalkak/
   app.py       백그라운드 앱. D-Bus 액션(capture, edit-last, edit)을 받는다
   capture.py   캡처 요청 (xdg-desktop-portal Screenshot, interactive=true → GNOME 스크린샷 화면)
   editor.py    편집 창 (도구 막대, 색·굵기 막대, 글자 입력, 키보드)
-  canvas.py    캔버스 (그리기·옮기기·크기조절·자르기·실행취소·PNG 내보내기)
-  shapes.py    도형 모델과 그리기, 히트 테스트
+  core.py      두 운영체제가 공유하는 도형 모델, 마우스 편집, 자르기, 실행 취소
+  canvas.py    GTK 캔버스와 PNG 내보내기
+  shapes.py    GTK 도형 렌더링
   icons.py     도구 아이콘 (코드로 직접 그림)
 ```
 
@@ -88,7 +116,7 @@ chalkak/
 
 처음에는 화면을 직접 받아 와 자체 선택 화면을 띄웠습니다(마우스를 놓는 순간 복사). 그런데 GNOME 은 앱이 화면을 받아 갈 때마다 **화면 전체를 하얗게 번쩍이게** 하고 이를 끌 방법이 없으며, 4K 2대에서는 선택 화면이 뜨기까지 0.7초가 걸렸습니다. GNOME 스크린샷 화면은 번쩍임 없이 약 0.2초 만에 뜹니다. 대신 드래그 뒤에 `Enter` 한 번이 필요합니다.
 
-## 테스트
+## 리눅스 테스트
 
 ```bash
 /usr/bin/python3 tests/test_render.py          # 창 없이: 그리기·블러·자르기·실행취소·히트테스트
@@ -96,7 +124,7 @@ chalkak/
 /usr/bin/python3 tests/e2e_real_input.py       # 진짜 단축키+마우스(가상 입력)로 전체 흐름. 손을 떼고 실행
 ```
 
-## 알아 둘 점
+## 리눅스에서 알아 둘 점
 
 - 캡처할 때마다 `~/Pictures/Screenshots/` 에 파일이 하나씩 쌓입니다(`Print` 키와 같은 동작).
 - GNOME Wayland 전용입니다. 다른 데스크탑에서는 캡처 화면이 다르게 뜨거나 복사가 안 될 수 있고, 단축키는 직접 등록해야 합니다.
