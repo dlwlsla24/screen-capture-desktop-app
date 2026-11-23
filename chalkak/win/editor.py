@@ -12,8 +12,8 @@ from .render import UI_FONT, measure_text, render_scene, rgb, scale_base, tool_i
 
 # (도구, 이름, 글자 단축키)
 TOOLS = [
-    ("arrow", "화살표", "a"),
     ("rect", "네모", "r"),
+    ("arrow", "화살표", "a"),
     ("ellipse", "동그라미", "o"),
     ("triangle", "세모", "g"),
     ("pen", "펜", "p"),
@@ -184,19 +184,19 @@ class Canvas(EditState):
 
 
 class EditorWindow(tk.Toplevel):
-    def __init__(self, root, image, on_close=None):
+    def __init__(self, root, image, on_close=None, *, saved_path=None):
         super().__init__(root)
         self.title(f"{system.APP_NAME} 편집")
         self.configure(bg=CANVAS_BG)
         self._on_close = on_close
         self._syncing = False
-        self._previous_tool = "arrow"
+        self._previous_tool = TOOLS[0][0]
         self._text = None
         self._text_editing = None
         self._icons = {}
         self._toast_timer = None
         self._focus_timer = None
-        self.saved_path = None
+        self.saved_path = saved_path
 
         self._build_header()
         self.canvas = Canvas(self, self, image)
@@ -204,7 +204,7 @@ class EditorWindow(tk.Toplevel):
         self._build_pill()
         self._toast = tk.Label(self, bg="#111113", fg="white", font=(UI_FONT, -13, "bold"), padx=16, pady=7)
 
-        self._select_tool_button("arrow")
+        self._select_tool_button(self.canvas.tool)
         self._select_dot(self.color_buttons, 0)
         self._select_dot(self.size_buttons, 1)
         self.sync_actions()
@@ -245,9 +245,9 @@ class EditorWindow(tk.Toplevel):
         right.pack(side="right", padx=10)
         done = tk.Label(right, text="복사하고 닫기", bg=PRIMARY, fg="white", font=(UI_FONT, -13, "bold"), padx=14, pady=6, cursor="hand2")
         done.bind("<Button-1>", lambda _e: self.copy_and_close())
-        Tooltip(done, "결과를 클립보드에 복사하고 창을 닫습니다 (Enter)")
+        Tooltip(done, "PNG로 저장하고 클립보드에 복사한 뒤 창을 닫습니다 (Ctrl+S 또는 Enter)")
         done.pack(side="right", pady=7)
-        self._bar_button(right, "save", "사진 폴더에 저장 (Ctrl+S)", self.save).pack(side="right", padx=6)
+        self._bar_button(right, "save", "사진 폴더에 저장", self.save).pack(side="right", padx=6)
 
         tools = tk.Frame(header, bg=BAR_BG)
         tools.place(relx=0.5, rely=0.5, anchor="center")
@@ -414,12 +414,19 @@ class EditorWindow(tk.Toplevel):
     # ── 키보드 ────────────────────────────────────────────────────────────
     def _key_pressed(self, event):
         canvas = self.canvas
-        if canvas.editing:
-            return None  # 입력 상자가 직접 처리한다
         key = event.keysym
         ctrl, shift = bool(event.state & 0x4), bool(event.state & 0x1)
         # 한글 입력 상태에서도 글자 단축키가 먹도록 키 코드(가상 키)로도 확인한다.
         letter = chr(event.keycode).lower() if system.IS_WINDOWS and 65 <= event.keycode <= 90 else key.lower()
+
+        if ctrl and letter == "s":
+            if canvas.tool == "crop":
+                self.finish_crop(True)
+            self.copy_and_close()
+            return "break"
+
+        if canvas.editing:
+            return None
 
         if ctrl:
             if letter == "z":
@@ -428,8 +435,6 @@ class EditorWindow(tk.Toplevel):
                 canvas.redo()
             elif letter == "c":
                 self.copy()
-            elif letter == "s":
-                self.save()
             else:
                 return None
             return "break"
@@ -441,7 +446,7 @@ class EditorWindow(tk.Toplevel):
         elif key == "Escape":
             if canvas.tool == "crop":
                 self.finish_crop(False)
-            elif not canvas.deselect() and not canvas.dirty:
+            elif not canvas.deselect():
                 self.close()
         elif key in ("Delete", "BackSpace"):
             canvas.delete_selected()
@@ -464,27 +469,37 @@ class EditorWindow(tk.Toplevel):
 
     def copy(self, toast=True):
         image = self.canvas.export()
-        system.copy_image(image)
-        self.canvas.dirty = False
+        if self._persist(image) is None:
+            return None
+        try:
+            system.copy_image(image)
+        except OSError as err:
+            self.toast(f"복사하지 못했어요: {err}", 4)
+            return None
         if toast:
-            self.toast("클립보드에 복사했어요")
+            self.toast("저장하고 클립보드에 복사했어요")
         return image
 
     def copy_and_close(self):
-        self.copy(toast=False)
-        self.close()
+        if self.copy(toast=False) is not None:
+            self._finish_close()
 
-    def save(self):
-        image = self.canvas.export()
-        path = system.new_save_path()
+    def _persist(self, image):
         try:
-            image.save(path, "PNG")
+            if self.saved_path is None:
+                self.saved_path = system.save_png(image)
+            else:
+                system.overwrite_png(image, self.saved_path)
         except OSError as err:
-            self.toast(f"저장하지 못했어요: {err.strerror}", 4)
+            self.toast(f"저장하지 못했어요: {err}", 4)
             return None
         self.canvas.dirty = False
-        self.saved_path = path
-        self.toast(f"저장했어요 · {os.path.basename(path)}", 4)
+        return self.saved_path
+
+    def save(self):
+        path = self._persist(self.canvas.export())
+        if path:
+            self.toast(f"저장했어요 · {os.path.basename(path)}", 4)
         return path
 
     def destroy(self):
@@ -497,6 +512,12 @@ class EditorWindow(tk.Toplevel):
         super().destroy()
 
     def close(self):
+        if self._persist(self.canvas.export()) is None:
+            return False
+        self._finish_close()
+        return True
+
+    def _finish_close(self):
         self.destroy()
         if self._on_close:
             self._on_close(self)

@@ -28,6 +28,29 @@ from gi.repository import Gtk, Adw, Gsk
 assert (Gtk.get_major_version(), Gtk.get_minor_version()) >= (4, 14), "GTK 4.14 이상이 필요합니다"
 PY
 
+GDK_BACKEND=x11 "$PYTHON" - <<'PY' || { echo "영역 선택기를 열 수 없습니다. GNOME 데스크톱에서 실행하고 xwayland 및 gir1.2-gtk-3.0 설치 여부를 확인하세요."; exit 1; }
+import gi
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GdkX11", "3.0")
+from gi.repository import Gdk, GdkX11, Gtk
+ok, _ = Gtk.init_check()
+if not ok or Gdk.Screen.get_default().get_rgba_visual() is None:
+    raise SystemExit("XWayland 디스플레이와 투명 비주얼이 필요합니다.")
+PY
+
+"$PYTHON" - <<'PY' || { echo "화면 캡처 패키지를 설치하세요: sudo apt install gir1.2-gstreamer-1.0 gir1.2-gst-plugins-base-1.0 gstreamer1.0-plugins-base gstreamer1.0-pipewire"; exit 1; }
+import gi
+gi.require_version("Gst", "1.0")
+gi.require_version("GstVideo", "1.0")
+gi.require_version("GstApp", "1.0")
+from gi.repository import Gst, GstApp, GstVideo
+Gst.init(None)
+for element in ("pipewiresrc", "videoconvert", "appsink"):
+    if Gst.ElementFactory.find(element) is None:
+        raise SystemExit(f"GStreamer 요소가 필요합니다: {element}")
+PY
+
 # ── 1. 실행 중이면 끈다 ────────────────────────────────────────────────────
 running() {
   gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus \
@@ -36,7 +59,14 @@ running() {
 if running; then
   say "실행 중인 심플찰칵을 종료합니다"
   gapplication action "$APP_ID" quit || true
-  sleep 0.5
+  for _ in {1..30}; do
+    running || break
+    sleep 0.1
+  done
+  if running; then
+    echo "기존 심플찰칵이 아직 실행 중입니다. 편집 창에서 저장 상태를 확인한 뒤 다시 설치하세요." >&2
+    exit 1
+  fi
 fi
 
 # ── 2. 파일 복사 ───────────────────────────────────────────────────────────
@@ -69,7 +99,7 @@ DBusActivatable=true
 StartupNotify=false
 Categories=Utility;Graphics;
 Keywords=screenshot;capture;스크린샷;캡처;캡쳐;찰칵;심플찰칵;
-Actions=capture;edit-last;
+Actions=capture;edit-last;select-monitors;
 
 [Desktop Action capture]
 Name=새 캡처
@@ -78,6 +108,10 @@ Exec=gapplication action $APP_ID capture
 [Desktop Action edit-last]
 Name=최근 스크린샷 편집
 Exec=gapplication action $APP_ID edit-last
+
+[Desktop Action select-monitors]
+Name=캡처할 모니터 다시 선택
+Exec=gapplication action $APP_ID select-monitors
 EOF
 
 cat > "$DATA/dbus-1/services/$APP_ID.service" <<EOF
@@ -147,3 +181,4 @@ gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/
   (setsid "$BIN/chalkak" --gapplication-service >/dev/null 2>&1 &)
 
 say "설치 완료. Shift+Super(Win)+2 를 눌러 보세요."
+echo "첫 캡처에서 GNOME이 화면 공유를 물으면 캡처할 모니터를 선택하세요."

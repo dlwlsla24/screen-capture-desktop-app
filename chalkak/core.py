@@ -204,7 +204,7 @@ class EditState:
         self.shapes = []
         self.crop = (0, 0, width, height)
         self.selected = None
-        self.tool = "arrow"
+        self.tool = "rect"
         self.color = (1.0, 0.23, 0.19)
         self.size_idx = 1
         self.undo_stack = []

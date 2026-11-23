@@ -37,6 +37,8 @@ PY
 fi
 
 rm -rf "$DATA/chalkak" "${XDG_CACHE_HOME:-$HOME/.cache}/chalkak"
+rm -f "${XDG_STATE_HOME:-$HOME/.local/state}/chalkak/portal-ready" \
+  "${XDG_STATE_HOME:-$HOME/.local/state}/chalkak/screencast-restore-token"
 rm -f "$HOME/.local/bin/chalkak" \
   "$DATA/applications/$APP_ID.desktop" \
   "$DATA/dbus-1/services/$APP_ID.service" \

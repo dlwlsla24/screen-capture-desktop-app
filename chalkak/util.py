@@ -1,7 +1,9 @@
 """공용 헬퍼: 경로, 색, 좌표 타입, 클립보드."""
 
 import os
+import stat
 import sys
+import tempfile
 import time
 import warnings
 
@@ -53,15 +55,40 @@ def screenshots_dir():
     return path
 
 
-def new_save_path():
-    """~/Pictures/Screenshots/심플찰칵 2026-11-23 14-30-12.png (겹치면 번호를 붙인다)."""
+def save_png(png):
+    """완성된 PNG만 공개하고 같은 시각의 다른 파일은 덮어쓰지 않는다."""
+    folder = screenshots_dir()
     stamp = time.strftime("%Y-%m-%d %H-%M-%S")
-    base = os.path.join(screenshots_dir(), f"심플찰칵 {stamp}")
-    path, n = base + ".png", 1
-    while os.path.exists(path):
-        n += 1
-        path = f"{base} ({n}).png"
-    return path
+    base = os.path.join(folder, f"심플찰칵 {stamp}")
+    with tempfile.NamedTemporaryFile(dir=folder, prefix=".chalkak-") as staging:
+        staging.write(png)
+        staging.flush()
+        os.fsync(staging.fileno())
+        number = 1
+        while True:
+            suffix = "" if number == 1 else f" ({number})"
+            path = f"{base}{suffix}.png"
+            try:
+                os.link(staging.name, path)
+                return path
+            except FileExistsError:
+                number += 1
+
+
+def replace_capture_png(path, png):
+    """Publish the edit atomically while retaining the capture time used by edit-last."""
+    original = os.stat(path)
+    with tempfile.NamedTemporaryFile(dir=os.path.dirname(path), prefix=".chalkak-", delete=False) as staging:
+        try:
+            staging.write(png)
+            staging.flush()
+            os.fchmod(staging.fileno(), stat.S_IMODE(original.st_mode))
+            os.utime(staging.fileno(), ns=(original.st_atime_ns, original.st_mtime_ns))
+            os.fsync(staging.fileno())
+            os.replace(staging.name, path)
+        finally:
+            if os.path.exists(staging.name):
+                os.unlink(staging.name)
 
 
 def latest_screenshot():
@@ -78,7 +105,7 @@ def latest_screenshot():
                 continue
             path = os.path.join(folder, name)
             try:
-                modified = os.path.getmtime(path)
+                modified = os.stat(path).st_mtime_ns
             except OSError:
                 continue
             if modified > newest_time:
@@ -106,4 +133,5 @@ def copy_png(display, png_bytes):
     반드시 창이 떠 있는 상태에서 호출한다.
     """
     provider = Gdk.ContentProvider.new_for_bytes("image/png", GLib.Bytes.new(png_bytes))
-    display.get_clipboard().set_content(provider)
+    if not display.get_clipboard().set_content(provider):
+        raise OSError("클립보드가 이미지를 받지 못했습니다")

@@ -115,7 +115,8 @@ class SelectionOverlay:
 class Toast:
     """캡처 직후 화면 오른쪽 아래에 잠깐 뜨는 미리보기. 누르면 편집 창이 열린다."""
 
-    def __init__(self, root, image, on_click, seconds=4.0, edit_shortcut="Shift+Win+E"):
+    def __init__(self, root, image, on_click, seconds=4.0, edit_shortcut="Shift+Win+E",
+                 status="저장하고 복사했어요"):
         self.window = tk.Toplevel(root)
         self.window.overrideredirect(True)
         self.window.attributes("-topmost", True)
@@ -128,7 +129,7 @@ class Toast:
         self._photo = ImageTk.PhotoImage(thumb)
         widgets = [body, tk.Label(body, image=self._photo, bg="#232327", bd=0)]
         widgets[1].pack(padx=10, pady=(10, 6))
-        title = tk.Label(body, text="복사했어요  ✓", fg="white", bg="#232327", font=(UI_FONT, -15, "bold"))
+        title = tk.Label(body, text=status, fg="white", bg="#232327", font=(UI_FONT, -15, "bold"))
         title.pack(padx=14, anchor="w")
         hint = tk.Label(body, text="누르면 편집" + (f"  ·  {edit_shortcut}" if edit_shortcut else ""), fg="#b9b9c0", bg="#232327", font=(UI_FONT, -13))
         hint.pack(padx=14, pady=(0, 10), anchor="w")
