@@ -1,34 +1,35 @@
-"""화면 전체를 한 장 찍는다 (xdg-desktop-portal Screenshot, 대화상자 없음).
+"""화면 캡처: GNOME 의 Print 키 화면을 그대로 띄운다.
 
-포털은 결과를 사진 폴더에 PNG 로 떨어뜨리고 그 경로를 알려 준다.
-읽은 뒤 그 파일은 바로 지운다(사용자 사진 폴더를 어지르지 않기 위해).
+xdg-desktop-portal Screenshot 을 interactive=true 로 부르면 GNOME Shell 이 자기 스크린샷
+화면(영역·화면·창 선택)을 띄우고, 찍힌 그림을 클립보드에 복사한 뒤 사진 폴더에 저장하고
+그 파일 경로를 돌려준다. 캡처·복사·저장은 전부 GNOME 이 하고, 우리는 결과 파일만 받는다.
+
+직접 화면을 받아 오는 방식(interactive=false)은 쓰지 않는다. GNOME 이 찍을 때마다 화면
+전체를 하얗게 번쩍이게 하고(끌 수 없음), 4K 2대 기준 0.7초가 걸린다.
 """
 
 import os
-import threading
+import time
 
-import gi
-
-gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gio, GLib  # noqa: E402
+from gi.repository import Gio, GLib
 
 PORTAL = "org.freedesktop.portal.Desktop"
 PORTAL_PATH = "/org/freedesktop/portal/desktop"
-TIMEOUT_SECONDS = 6
 
 _counter = 0
 
 
-class ScreenGrab:
-    """비동기 전체 화면 캡처. on_done(pixbuf) 또는 on_error(message) 를 한 번 부른다."""
+class NativeCapture:
+    """캡처 한 번. on_done(파일 경로) / on_cancel() / on_error(요청 자체가 실패한 경우의 메시지) 중 하나를 부른다."""
 
-    def __init__(self, on_done, on_error):
+    def __init__(self, on_done, on_cancel, on_error):
         self._on_done = on_done
+        self._on_cancel = on_cancel
         self._on_error = on_error
-        self._finished = False
-        self._sub = 0
-        self._timeout = 0
         self._bus = None
+        self._sub = 0
+        self.started = time.monotonic()
+        self.finished = False
 
     def start(self):
         global _counter
@@ -37,19 +38,18 @@ class ScreenGrab:
             self._bus = Gio.bus_get_sync(Gio.BusType.SESSION)
             sender = self._bus.get_unique_name()[1:].replace(".", "_")
             token = f"chalkak_{os.getpid()}_{_counter}"
-            request_path = f"{PORTAL_PATH}/request/{sender}/{token}"
             self._sub = self._bus.signal_subscribe(
                 PORTAL,
                 "org.freedesktop.portal.Request",
                 "Response",
-                request_path,
+                f"{PORTAL_PATH}/request/{sender}/{token}",
                 None,
                 Gio.DBusSignalFlags.NONE,
                 self._on_response,
             )
             options = {
                 "handle_token": GLib.Variant("s", token),
-                "interactive": GLib.Variant("b", False),
+                "interactive": GLib.Variant("b", True),
             }
             self._bus.call(
                 PORTAL,
@@ -63,68 +63,33 @@ class ScreenGrab:
                 None,
                 self._on_call_done,
             )
-            self._timeout = GLib.timeout_add_seconds(TIMEOUT_SECONDS, self._on_timeout)
         except GLib.Error as err:
-            self._fail(f"화면 캡처 요청 실패: {err.message}")
+            self._finish(self._on_error, f"화면 캡처 요청 실패: {err.message}")
 
-    # ── 포털 응답 ─────────────────────────────────────────────────────────
     def _on_call_done(self, bus, result):
         try:
             bus.call_finish(result)
         except GLib.Error as err:
-            self._fail(f"화면 캡처 요청 실패: {err.message}")
+            self._finish(self._on_error, f"화면 캡처 요청 실패: {err.message}")
 
     def _on_response(self, _bus, _sender, _path, _iface, _signal, params):
         code, results = params.unpack()
-        if code != 0 or "uri" not in results:
-            self._fail("화면 캡처가 거부되었거나 취소되었습니다.")
+        if code == 0 and "uri" in results:
+            self._finish(self._on_done, Gio.File.new_for_uri(results["uri"]).get_path())
+        else:
+            # Esc 로 닫아도 GNOME 은 "실패"(코드 2)로 알려 준다. 취소와 구분할 수 없으므로 조용히 끝낸다.
+            self._finish(self._on_cancel)
+
+    def _finish(self, callback, *args):
+        if self.finished:
             return
-        path = Gio.File.new_for_uri(results["uri"]).get_path()
-        threading.Thread(target=self._load, args=(path,), daemon=True).start()
+        self.finished = True
+        self.abandon()
+        callback(*args)
 
-    def _load(self, path):
-        try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file(path)
-            error = None
-        except GLib.Error as err:
-            pixbuf, error = None, err.message
-        try:
-            os.remove(path)
-        except OSError:
-            pass
-        GLib.idle_add(self._loaded, pixbuf, error)
-
-    def _loaded(self, pixbuf, error):
-        if pixbuf is None:
-            self._fail(f"캡처 이미지를 읽지 못했습니다: {error}")
-        elif not self._finished:
-            self._cleanup()
-            self._on_done(pixbuf)
-        return GLib.SOURCE_REMOVE
-
-    def _on_timeout(self):
-        self._timeout = 0
-        self._fail("화면 캡처 응답이 없습니다.")
-        return GLib.SOURCE_REMOVE
-
-    def _fail(self, message):
-        if self._finished:
-            return
-        self._cleanup()
-        self._on_error(message)
-
-    def _cleanup(self):
-        self._finished = True
+    def abandon(self):
+        """응답을 더 기다리지 않는다."""
+        self.finished = True
         if self._sub and self._bus:
             self._bus.signal_unsubscribe(self._sub)
             self._sub = 0
-        if self._timeout:
-            GLib.source_remove(self._timeout)
-            self._timeout = 0
-
-    def cancel(self):
-        """결과를 버린다. (포털이 만든 파일은 응답이 오면 지워진다.)"""
-        if self._finished:
-            return
-        self._on_done = lambda _pixbuf: None
-        self._on_error = lambda _message: None

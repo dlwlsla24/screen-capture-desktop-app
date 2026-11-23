@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
-# 찰칵 설치: 사용자 홈 아래에만 설치한다 (sudo 불필요).
+# 심플찰칵 설치: 사용자 홈 아래에만 설치한다 (sudo 불필요).
 #   - 앱 본체        ~/.local/share/chalkak/
 #   - 실행 파일      ~/.local/bin/chalkak
 #   - 앱 목록 등록   ~/.local/share/applications/app.chalkak.Chalkak.desktop
 #   - D-Bus 자동 실행 ~/.local/share/dbus-1/services/app.chalkak.Chalkak.service
 #   - 로그인 시 대기 ~/.config/autostart/app.chalkak.Chalkak.desktop
-#   - 단축키         Shift+Super+2 (캡처), Shift+Super+E (방금 캡처 편집)
+#   - 단축키         Shift+Super+2 (캡처), Shift+Super+E (최근 스크린샷 편집)
+# 내부 이름(폴더·명령·앱 ID)은 chalkak 그대로 쓴다. 화면에 보이는 이름만 "심플찰칵"이다.
 set -euo pipefail
 
 APP_ID="app.chalkak.Chalkak"
@@ -33,14 +34,14 @@ running() {
     --method org.freedesktop.DBus.NameHasOwner "$APP_ID" 2>/dev/null | grep -q true
 }
 if running; then
-  say "실행 중인 찰칵을 종료합니다"
+  say "실행 중인 심플찰칵을 종료합니다"
   gapplication action "$APP_ID" quit || true
   sleep 0.5
 fi
 
 # ── 2. 파일 복사 ───────────────────────────────────────────────────────────
 say "앱 파일을 설치합니다 → $DATA/chalkak"
-rm -rf "$DATA/chalkak/chalkak"
+rm -rf "$DATA/chalkak/chalkak" "${XDG_CACHE_HOME:-$HOME/.cache}/chalkak"
 mkdir -p "$DATA/chalkak/chalkak" "$BIN" "$DATA/applications" "$DATA/dbus-1/services" \
   "$DATA/icons/hicolor/scalable/apps" "$CONFIG/autostart"
 cp "$SRC"/chalkak/*.py "$DATA/chalkak/chalkak/"
@@ -58,16 +59,16 @@ chmod +x "$BIN/chalkak"
 cat > "$DATA/applications/$APP_ID.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=찰칵
+Name=심플찰칵
 GenericName=스크린샷
-Comment=영역을 드래그해 캡처하고 바로 복사·편집
+Comment=화면을 캡처해 바로 복사하고, 필요하면 주석을 달아 편집
 Exec=$BIN/chalkak
 Icon=$APP_ID
 Terminal=false
 DBusActivatable=true
 StartupNotify=false
 Categories=Utility;Graphics;
-Keywords=screenshot;capture;스크린샷;캡처;캡쳐;찰칵;
+Keywords=screenshot;capture;스크린샷;캡처;캡쳐;찰칵;심플찰칵;
 Actions=capture;edit-last;
 
 [Desktop Action capture]
@@ -75,7 +76,7 @@ Name=새 캡처
 Exec=gapplication action $APP_ID capture
 
 [Desktop Action edit-last]
-Name=방금 캡처 편집
+Name=최근 스크린샷 편집
 Exec=gapplication action $APP_ID edit-last
 EOF
 
@@ -88,7 +89,7 @@ EOF
 cat > "$CONFIG/autostart/$APP_ID.desktop" <<EOF
 [Desktop Entry]
 Type=Application
-Name=찰칵 (대기)
+Name=심플찰칵 (대기)
 Comment=단축키에 바로 반응하도록 로그인할 때 미리 띄워 둡니다
 Exec=gdbus call --session --dest org.freedesktop.DBus --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.StartServiceByName $APP_ID 0
 Icon=$APP_ID
@@ -118,8 +119,8 @@ def gs(*args):
 raw = gs("get", SCHEMA, "custom-keybindings")
 paths = ast.literal_eval(raw.replace("@as", "").strip()) if raw else []
 entries = [
-    ("chalkak-capture", "찰칵: 영역 캡처", f"gapplication action {app_id} capture", capture_key),
-    ("chalkak-edit", "찰칵: 방금 캡처 편집", f"gapplication action {app_id} edit-last", edit_key),
+    ("chalkak-capture", "심플찰칵: 캡처", f"gapplication action {app_id} capture", capture_key),
+    ("chalkak-edit", "심플찰칵: 최근 스크린샷 편집", f"gapplication action {app_id} edit-last", edit_key),
 ]
 for slug, name, command, binding in entries:
     path = f"{BASE}{slug}/"

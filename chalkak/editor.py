@@ -12,7 +12,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango  # noqa: E402
 
 from .canvas import PAD, PAD_BOTTOM, PAD_TOP, Canvas
 from .icons import Dot, Icon
-from .util import copy_png, hex_rgb, new_save_path
+from .util import APP_NAME, copy_png, hex_rgb, new_save_path
 
 # (도구, 이름, 글자 단축키)
 TOOLS = [
@@ -33,7 +33,7 @@ TEXT_PAD_X, TEXT_PAD_Y = 7, 4  # 입력 상자 안쪽 여백 + 테두리
 
 class EditorWindow(Adw.ApplicationWindow):
     def __init__(self, app, pixbuf, ratio=1.0, source_path=None):
-        super().__init__(application=app, title="찰칵 편집")
+        super().__init__(application=app, title=f"{APP_NAME} 편집")
         self.source_path = source_path
         self._syncing = False
         self._previous_tool = "arrow"
