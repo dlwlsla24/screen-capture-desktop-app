@@ -37,10 +37,11 @@ def _active_monitors(bus):
 
 
 class ScreenCast:
-    def __init__(self, ready, cancelled, error, *, reselect=False):
+    def __init__(self, ready, cancelled, error, *, reselect=False, nudge=None):
         self.ready = ready
         self.cancelled = cancelled
         self.error = error
+        self.nudge = nudge  # nudge(regions): 멈춰 있는 모니터를 다시 그리게 한다 (capture_frame 참고)
         self.token_path = Path(GLib.get_user_state_dir(), "chalkak", "screencast-restore-token")
         self.bus = None
         self.session = None
@@ -54,6 +55,9 @@ class ScreenCast:
         self.restore_requested = False
         self.settle_source = 0
         self.closed = False
+        # GNOME 화면 공유 선택 창이 떠 있다: 토큰 없이 SelectSources 를 보낸 뒤 Start 응답(_started)까지.
+        # 사용자가 모니터를 고르는 중이므로 단축키를 다시 눌러도 이 시도를 버리지 않는다.
+        self.choosing = False
 
     def start(self):
         if self.closed:
@@ -149,6 +153,7 @@ class ScreenCast:
             if token:
                 options["restore_token"] = GLib.Variant("s", token)
                 self.restore_requested = True
+        self.choosing = not self.restore_requested  # 토큰으로 조용히 복원하면 선택 창이 뜨지 않는다
         self._call_request("SelectSources", "oa{sv}", (self.session,), options, self._selected)
 
     def _session_closed(self, *_):
@@ -160,6 +165,7 @@ class ScreenCast:
         self._call_request("Start", "osa{sv}", (self.session, ""), {}, self._started)
 
     def _started(self, results):
+        self.choosing = False
         elapsed_us = GLib.get_monotonic_time() - self.start_time_us
         streams = results.get("streams")
         if not streams:
@@ -234,7 +240,8 @@ class ScreenCast:
             index, = reply.unpack()
             reader = read_snapshot(fds.get(index), streams,
                                    lambda pixbuf: self._finish(self.ready, pixbuf),
-                                   lambda reason: self._finish(self.error, str(reason)))
+                                   lambda reason: self._finish(self.error, str(reason)),
+                                   nudge=self.nudge)
             if self.closed:
                 reader.cancel()
             else:
@@ -251,6 +258,7 @@ class ScreenCast:
         if self.closed:
             return
         self.closed = True
+        self.choosing = False
         if self.settle_source:
             GLib.source_remove(self.settle_source)
             self.settle_source = 0

@@ -46,7 +46,8 @@ CSS = """
 NOTIFY_ID = "capture"
 
 
-STALE_SECONDS = 20  # 캡처 화면이 이보다 오래 떠 있으면 단축키를 다시 눌렀을 때 새로 띄운다
+STALE_SECONDS = 20  # 선택 화면이 이보다 오래 떠 있으면 단축키를 다시 눌렀을 때 새로 띄운다
+RETRY_SECONDS = 1.5  # 화면을 이보다 오래 못 받고 있으면 다시 누른 단축키로 새로 시작한다 (그 전은 연타로 본다)
 
 
 class ChalkakApp(Adw.Application):
@@ -107,9 +108,19 @@ class ChalkakApp(Adw.Application):
     # ── 캡처 ──────────────────────────────────────────────────────────────
     def capture(self, *, reselect=False):
         if self.pending is not None:
-            if not reselect and time.monotonic() - self.pending.started < STALE_SECONDS:
-                log("capture: 이미 캡처 화면이 떠 있어 무시")
-                return
+            waited = time.monotonic() - self.pending.started
+            if not reselect:
+                if self.pending.selecting or self.pending.choosing:
+                    # 사용자가 영역이나 모니터를 고르는 중이다. 다시 눌러도 이 화면을 닫지 않는다.
+                    if waited < STALE_SECONDS:
+                        log("capture: 이미 선택 화면이 떠 있어 무시" if self.pending.selecting
+                            else "capture: 화면 공유 선택 창이 떠 있어 무시")
+                        return
+                elif waited < RETRY_SECONDS:
+                    log(f"capture: 화면을 받는 중이라 무시 ({waited * 1000:.0f}ms 경과)")
+                    return
+                else:
+                    log(f"capture: 화면을 {waited * 1000:.0f}ms 동안 못 받아 이전 시도를 버리고 다시 시작")
             self.pending.abandon()
         self.preview.dismiss()
         log("capture: 영역 선택 요청")

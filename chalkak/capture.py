@@ -6,7 +6,7 @@ from gi.repository import GLib
 
 from .capture_selection import AreaSelection, picker
 from .screencast import ScreenCast
-from .util import save_png
+from .util import log, save_png
 
 
 class NativeCapture:
@@ -15,9 +15,16 @@ class NativeCapture:
         self._on_cancel = on_cancel
         self._on_error = on_error
         self._selection = None
-        self._cast = ScreenCast(self._snapshot, self._cancel, self._failed, reselect=reselect)
+        self._cast = ScreenCast(self._snapshot, self._cancel, self._failed, reselect=reselect,
+                                nudge=picker.nudge)
         self.started = time.monotonic()
         self.finished = False
+        self.selecting = False  # 선택 화면이 떠 있다 (화면을 받아 선택기에 넘긴 뒤)
+
+    @property
+    def choosing(self):
+        """GNOME 화면 공유 선택 창이 떠 있다 (첫 사용·select-monitors 에서 사용자가 모니터를 고르는 중)."""
+        return self._cast.choosing
 
     def start(self):
         try:
@@ -33,9 +40,11 @@ class NativeCapture:
     def _snapshot(self, snapshot):
         if self.finished:
             return
+        log(f"capture: 화면 받음 ({(time.monotonic() - self.started) * 1000:.0f}ms) → 선택 화면 표시")
         try:
             self._selection = AreaSelection(snapshot, self._selected, self._cancel, self._failed)
             self._selection.show()
+            self.selecting = True
         except (GLib.Error, OSError, ValueError) as err:
             self._failed(str(err))
 
@@ -59,6 +68,7 @@ class NativeCapture:
 
     def abandon(self):
         self.finished = True
+        self.selecting = False
         self._cast.close()
         if self._selection:
             self._selection.close()

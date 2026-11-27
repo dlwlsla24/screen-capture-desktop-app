@@ -9,6 +9,12 @@ gi.require_version("Gdk", "4.0")
 gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, GLib
 
+# GNOME 은 화면이 바뀐 모니터의 프레임만 보낸다. 가만히 멈춰 있는 모니터는 끝내 프레임이
+# 오지 않으므로, 아직 안 온 모니터를 일정 간격으로 "다시 그리게" 건드린다.
+NUDGE_FIRST = 0.06
+NUDGE_EVERY = 0.10
+FRAME_TIMEOUT = 5
+
 
 def monitor_layout():
     display = Gdk.Display.get_default()
@@ -99,13 +105,15 @@ def _pipeline(Gst, fd, node):
 
 
 class _Snapshot:
-    def __init__(self, fd, streams, ready, error):
+    def __init__(self, fd, streams, ready, error, nudge=None):
         self.fd = fd
         self.streams = streams
         self.ready, self.error = ready, error
+        self.nudge = nudge  # nudge(regions): 그 모니터들을 다시 그리게 한다
+        self.next_nudge = 0.0
         self.pipelines = {}
         self.frames = {}
-        self.deadline = time.monotonic() + 10
+        self.deadline = None  # 파이프라인을 모두 시작한 뒤(_start 끝)에 잡는다
         self.source = GLib.idle_add(self._start)
 
     def _start(self):
@@ -125,6 +133,10 @@ class _Snapshot:
                 self.pipelines[node] = pipeline
                 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
                     raise ValueError("공유 화면 스트림을 시작할 수 없습니다.")
+            # 첫 캡처의 Gst 초기화(레지스트리 재스캔)·파이프라인 시작 시간은 프레임 대기 한도에서 뺀다.
+            now = time.monotonic()
+            self.deadline = now + FRAME_TIMEOUT
+            self.next_nudge = now + NUDGE_FIRST
             self.source = GLib.timeout_add(15, self._poll)
         except Exception as exc:
             self._finish(self.error, str(exc))
@@ -146,8 +158,12 @@ class _Snapshot:
                 elif message:
                     raise ValueError("공유 화면에서 프레임을 받지 못했습니다.")
             if len(self.frames) < len(self.positions):
-                if time.monotonic() >= self.deadline:
+                now = time.monotonic()
+                if now >= self.deadline:
                     raise TimeoutError("공유 화면 응답 시간이 초과되었습니다.")
+                if self.nudge is not None and now >= self.next_nudge:
+                    self.next_nudge = now + NUDGE_EVERY
+                    self._nudge_missing()
                 return GLib.SOURCE_CONTINUE
             result = _compose(self.frames, self.positions)
         except Exception as exc:
@@ -155,6 +171,13 @@ class _Snapshot:
         else:
             self._finish(self.ready, result)
         return GLib.SOURCE_REMOVE
+
+    def _nudge_missing(self):
+        regions = [region for node, region in self.positions.items() if node not in self.frames]
+        try:
+            self.nudge(regions)
+        except Exception:  # noqa: BLE001  건드리지 못해도 화면이 바뀌면 프레임은 온다
+            pass
 
     def _finish(self, callback, value):
         self.source = 0  # the running GLib source removes itself on return
@@ -172,9 +195,9 @@ class _Snapshot:
         if self.fd is not None:
             os.close(self.fd)
             self.fd = None
-        self.ready = self.error = None
+        self.ready = self.error = self.nudge = None
 
 
-def read_snapshot(remote_fd, streams, on_ready, on_error):
+def read_snapshot(remote_fd, streams, on_ready, on_error, nudge=None):
     """Consume remote_fd; deliver once on GTK's main loop unless cancelled there."""
-    return _Snapshot(remote_fd, streams, on_ready, on_error)
+    return _Snapshot(remote_fd, streams, on_ready, on_error, nudge)

@@ -1,5 +1,6 @@
 """Send the granted portal pixels to the resident GTK3/XWayland selection helper."""
 
+import json
 import os
 from pathlib import Path
 import socket
@@ -82,6 +83,34 @@ class PickerConnection:
                        alpha=image.get_has_alpha(), stride=image.get_rowstride())
         picker_ipc.send(self.sock, message, image.get_pixels())
         self.active = selection
+
+    def nudge(self, regions):
+        """그 모니터들에 보이지 않는 1픽셀 창을 잠깐 띄워 화면을 다시 그리게 한다.
+
+        GNOME 은 내용이 바뀐 모니터의 프레임만 보내므로, 가만히 멈춰 있는 모니터는
+        건드려 주지 않으면 캡처할 화면을 끝내 받지 못한다.
+        """
+        if self.sock is None:
+            return
+        wanted = {tuple(region) for region in regions}
+        layout, monitors = [], []
+        for monitor in Gdk.Display.get_default().get_monitors():
+            r = monitor.get_geometry()
+            region = (r.x, r.y, r.width, r.height)
+            layout.append(region)
+            if region in wanted:
+                monitors.append((monitor.get_connector(), region))
+        if not monitors:
+            return
+        packet = json.dumps(dict(command="nudge", id=self.serial, monitors=monitors, layout=layout))
+        try:
+            # nudge 는 캡처마다 수십 번 보낸다. 선택기가 살아 있지만 읽지 못해 송신 버퍼가 차면
+            # blocking send 는 GTK4 메인 루프를 멈추므로, 이것만 기다리지 않고 보낸다.
+            self.sock.send(packet.encode(), socket.MSG_DONTWAIT)
+        except BlockingIOError:
+            pass  # 버퍼가 가득 찼으면 이번 nudge 는 버린다. 0.1초 뒤 다시 보낸다.
+        except OSError:
+            pass  # 선택기가 죽었으면 _read 가 정리한다.
 
     def close(self, selection):
         if self.active is selection:
