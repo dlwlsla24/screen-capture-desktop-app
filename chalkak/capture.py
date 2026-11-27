@@ -19,6 +19,7 @@ class NativeCapture:
                                 nudge=picker.nudge)
         self.started = time.monotonic()
         self.finished = False
+        self.selecting = False  # 선택 화면이 떠 있다 (화면을 받아 선택기에 넘긴 뒤)
 
     def start(self):
         try:
@@ -38,6 +39,7 @@ class NativeCapture:
         try:
             self._selection = AreaSelection(snapshot, self._selected, self._cancel, self._failed)
             self._selection.show()
+            self.selecting = True
         except (GLib.Error, OSError, ValueError) as err:
             self._failed(str(err))
 
@@ -61,6 +63,7 @@ class NativeCapture:
 
     def abandon(self):
         self.finished = True
+        self.selecting = False
         self._cast.close()
         if self._selection:
             self._selection.close()

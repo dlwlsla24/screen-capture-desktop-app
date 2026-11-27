@@ -3,6 +3,7 @@
 import os
 import socket
 import sys
+import warnings
 
 import gi
 
@@ -94,8 +95,12 @@ class Picker:
 
     def available(self):
         screen = self.display.get_default_screen()
-        return [(screen.get_monitor_plug_name(i), geometry(self.display.get_monitor(i)))
-                for i in range(self.display.get_n_monitors())]
+        # GTK3 Gdk.Monitor 에는 커넥터 이름(DP-1 등)을 주는 API 가 없어 deprecated 호출을 그대로 쓴다.
+        # 매 캡처마다 journal 에 찍히는 DeprecationWarning 만 숨긴다.
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            return [(screen.get_monitor_plug_name(i), geometry(self.display.get_monitor(i)))
+                    for i in range(self.display.get_n_monitors())]
 
     def nudge(self, monitors, layout):
         """멈춰 있는 모니터를 다시 그리게 한다: 완전히 투명한 1픽셀 창을 띄웠다가 곧 없앤다."""
@@ -146,7 +151,9 @@ class Picker:
         pixel.set_size_request(1, 1)
         self.keys.add(pixel)
         pixel.show()
-        self.keys.set_opacity(0)
+        with warnings.catch_warnings():  # 동작은 그대로, DeprecationWarning 만 숨긴다
+            warnings.simplefilter("ignore", DeprecationWarning)
+            self.keys.set_opacity(0)
         self.keys.move(*self.outputs[0][0][:2])
         self.keys.connect("key-press-event", self.key)
         self.keys.realize()
