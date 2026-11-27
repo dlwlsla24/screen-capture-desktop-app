@@ -110,9 +110,11 @@ class ChalkakApp(Adw.Application):
         if self.pending is not None:
             waited = time.monotonic() - self.pending.started
             if not reselect:
-                if self.pending.selecting:
+                if self.pending.selecting or self.pending.choosing:
+                    # 사용자가 영역이나 모니터를 고르는 중이다. 다시 눌러도 이 화면을 닫지 않는다.
                     if waited < STALE_SECONDS:
-                        log("capture: 이미 선택 화면이 떠 있어 무시")
+                        log("capture: 이미 선택 화면이 떠 있어 무시" if self.pending.selecting
+                            else "capture: 화면 공유 선택 창이 떠 있어 무시")
                         return
                 elif waited < RETRY_SECONDS:
                     log(f"capture: 화면을 받는 중이라 무시 ({waited * 1000:.0f}ms 경과)")

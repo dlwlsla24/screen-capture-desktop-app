@@ -30,6 +30,7 @@ class RepeatCaptureTest(unittest.TestCase):
         capture = Mock(spec=NativeCapture)
         capture.started = self.clock.return_value
         capture.selecting = False
+        capture.choosing = False  # 토큰으로 조용히 복원하는 일반 경우
         return capture
 
     def press_again(self, after):
@@ -68,6 +69,26 @@ class RepeatCaptureTest(unittest.TestCase):
         second.abandon.assert_not_called()
 
 
+    def test_ignored_while_gnome_chooser_is_open(self):
+        # 첫 사용·select-monitors: GNOME 모니터 선택 창에서 고르는 중에는 1.5초가 지나도 닫지 않는다.
+        self.first.choosing = True
+        for after in (0.2, RETRY_SECONDS, RETRY_SECONDS + 5, STALE_SECONDS - 1):
+            self.press_again(after)
+        self.assertIs(self.app.pending, self.first)
+        self.first.abandon.assert_not_called()
+        self.native.assert_called_once()
+
+    def test_restarts_after_chooser_closed_when_frames_stall(self):
+        # 선택 창을 닫은 뒤(토큰 복원과 같은 상태)에는 다시 1.5초 규칙을 따른다.
+        self.first.choosing = True
+        self.press_again(RETRY_SECONDS + 1)
+        self.first.abandon.assert_not_called()
+        self.first.choosing = False
+        self.press_again(RETRY_SECONDS + 2)
+        self.first.abandon.assert_called_once_with()
+        self.assertEqual(self.native.call_count, 2)
+
+
 class SelectingFlagTest(unittest.TestCase):
     def test_set_when_selection_is_shown_and_cleared_on_abandon(self):
         with patch("chalkak.capture.AreaSelection") as overlay:
@@ -78,6 +99,14 @@ class SelectingFlagTest(unittest.TestCase):
             self.assertTrue(capture.selecting)
             capture.abandon()
             self.assertFalse(capture.selecting)
+
+    def test_choosing_follows_the_screencast(self):
+        capture = NativeCapture(Mock(), Mock(), Mock())
+        self.assertFalse(capture.choosing)
+        capture._cast.choosing = True
+        self.assertTrue(capture.choosing)
+        capture.abandon()
+        self.assertFalse(capture.choosing)
 
     def test_stays_off_when_selection_fails_to_open(self):
         error = Mock()

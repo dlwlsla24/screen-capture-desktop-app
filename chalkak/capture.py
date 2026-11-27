@@ -21,6 +21,11 @@ class NativeCapture:
         self.finished = False
         self.selecting = False  # 선택 화면이 떠 있다 (화면을 받아 선택기에 넘긴 뒤)
 
+    @property
+    def choosing(self):
+        """GNOME 화면 공유 선택 창이 떠 있다 (첫 사용·select-monitors 에서 사용자가 모니터를 고르는 중)."""
+        return self._cast.choosing
+
     def start(self):
         try:
             picker.start()  # Initialize GTK3/X11 while the consented frame is acquired.

@@ -153,6 +153,45 @@ class PortalLifecycleTest(unittest.TestCase):
         self.outputs[1] = "DP-4"
         self.assertNotIn("restore_token", self.next_capture())
 
+    def test_chooser_state_lasts_from_tokenless_select_until_start(self):
+        # 토큰이 없으면 GNOME 이 모니터 선택 창을 띄운다: 사용자가 고르는 동안만 choosing.
+        self.assertFalse(self.cast.choosing)
+        self.create()
+        self.assertNotIn("restore_token", self.bus.call.call_args.args[4].unpack()[1])
+        self.assertTrue(self.cast.choosing)
+        self.respond("SelectSources", 0, {})
+        self.assertTrue(self.cast.choosing)
+        with patch("chalkak.screencast.GLib.timeout_add", return_value=55):
+            self.respond("Start", 0, {"streams": GLib.Variant("a(ua{sv})", [(42, {})]),
+                                      "restore_token": GLib.Variant("s", "chosen")})
+        self.assertFalse(self.cast.choosing)
+
+    def test_cancelled_chooser_clears_state(self):
+        self.create()
+        self.assertTrue(self.cast.choosing)
+        self.respond("SelectSources", 0, {})
+        self.respond("Start", 1, {})
+        self.cancel.assert_called_once_with()
+        self.assertFalse(self.cast.choosing)
+
+    def test_silent_token_restore_is_not_choosing(self):
+        self.legacy("previous")
+        self.create()
+        self.assertEqual(self.bus.call.call_args.args[4].unpack()[1]["restore_token"], "previous")
+        self.assertFalse(self.cast.choosing)
+        self.respond("SelectSources", 0, {})
+        self.assertFalse(self.cast.choosing)
+
+    def test_reselect_and_old_portal_show_the_chooser(self):
+        self.legacy("previous")
+        self.next_capture(reselect=True)
+        self.assertTrue(self.cast.choosing)
+        self.props["version"] = GLib.Variant("u", 3)
+        self.next_capture()
+        self.assertTrue(self.cast.choosing)
+        self.cast.close()
+        self.assertFalse(self.cast.choosing)
+
     def test_empty_start_does_not_cache_choice(self):
         self.create()
         self.start_remote(())

@@ -1,6 +1,7 @@
 """Exercise the one-frame reader with real Gst buffers and synthetic video sources."""
 
 import os
+import time
 import unittest
 from unittest.mock import Mock, patch
 
@@ -55,10 +56,9 @@ class SnapshotTest(unittest.TestCase):
             return pipeline
 
         with patch.object(frame, "monitor_layout", return_value=[LEFT, RIGHT]), \
-             patch.object(frame, "_pipeline", side_effect=make):
+             patch.object(frame, "_pipeline", side_effect=make), \
+             patch.object(frame, "FRAME_TIMEOUT", 0 if timeout else frame.FRAME_TIMEOUT):
             reader = frame.read_snapshot(fd, streams, ready, error)
-            if timeout:
-                reader.deadline = 0
             self.assertFalse(values or errors)
             guard = GLib.timeout_add_seconds(3, loop.quit)
             loop.run()
@@ -153,16 +153,42 @@ class SnapshotTest(unittest.TestCase):
         fd = os.open(os.devnull, os.O_RDONLY)
         with patch.object(frame, "monitor_layout", return_value=[LEFT, RIGHT]), \
              patch.object(frame, "_pipeline", side_effect=lambda g, f, n: Gst.parse_launch("appsrc ! appsink name=frame")), \
-             patch.object(frame, "NUDGE_FIRST", 0.0), patch.object(frame, "NUDGE_EVERY", 0.01):
+             patch.object(frame, "NUDGE_FIRST", 0.0), patch.object(frame, "NUDGE_EVERY", 0.01), \
+             patch.object(frame, "FRAME_TIMEOUT", 0.15):
             reader = frame.read_snapshot(fd, [(43, {"position": RIGHT[:2]})], ready, error,
                                          Mock(side_effect=OSError("helper gone")))
-            reader.deadline = __import__("time").monotonic() + 0.15
             guard = GLib.timeout_add_seconds(3, loop.quit)
             loop.run()
             GLib.source_remove(guard)
             reader.cancel()
         self.assertFalse(values)
         self.assertIn("초과", errors[0])
+
+    def test_deadline_starts_after_pipelines_play(self):
+        # 첫 캡처는 Gst 초기화·파이프라인 시작이 오래 걸릴 수 있다. 그 시간은 프레임 대기
+        # 한도에 넣지 않는다: 한도는 모든 파이프라인이 PLAYING 이 된 뒤부터 센다.
+        fd = os.open(os.devnull, os.O_RDONLY)
+        slow = 0.3
+        pipeline = Gst.parse_launch("appsrc ! appsink name=frame")
+
+        def make(gst, remote_fd, node):
+            time.sleep(slow)
+            return pipeline
+
+        callback = Mock()
+        with patch.object(frame, "monitor_layout", return_value=[RIGHT]), \
+             patch.object(frame, "_pipeline", side_effect=make):
+            requested = time.monotonic()
+            reader = frame.read_snapshot(fd, [(43, {})], callback, callback)
+            self.assertIsNone(reader.deadline)
+            while reader.deadline is None:
+                GLib.MainContext.default().iteration(True)
+            started = time.monotonic()
+            reader.cancel()
+        self.assertEqual(pipeline.get_state(0).state, Gst.State.NULL)
+        self.assertGreaterEqual(reader.deadline, requested + slow + frame.FRAME_TIMEOUT)
+        self.assertLessEqual(reader.deadline, started + frame.FRAME_TIMEOUT)
+        callback.assert_not_called()
 
     def test_cancel_before_idle(self):
         fd = os.open(os.devnull, os.O_RDONLY)

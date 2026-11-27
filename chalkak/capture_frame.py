@@ -113,7 +113,7 @@ class _Snapshot:
         self.next_nudge = 0.0
         self.pipelines = {}
         self.frames = {}
-        self.deadline = time.monotonic() + FRAME_TIMEOUT
+        self.deadline = None  # 파이프라인을 모두 시작한 뒤(_start 끝)에 잡는다
         self.source = GLib.idle_add(self._start)
 
     def _start(self):
@@ -133,7 +133,10 @@ class _Snapshot:
                 self.pipelines[node] = pipeline
                 if pipeline.set_state(Gst.State.PLAYING) == Gst.StateChangeReturn.FAILURE:
                     raise ValueError("공유 화면 스트림을 시작할 수 없습니다.")
-            self.next_nudge = time.monotonic() + NUDGE_FIRST
+            # 첫 캡처의 Gst 초기화(레지스트리 재스캔)·파이프라인 시작 시간은 프레임 대기 한도에서 뺀다.
+            now = time.monotonic()
+            self.deadline = now + FRAME_TIMEOUT
+            self.next_nudge = now + NUDGE_FIRST
             self.source = GLib.timeout_add(15, self._poll)
         except Exception as exc:
             self._finish(self.error, str(exc))
