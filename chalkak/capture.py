@@ -6,7 +6,7 @@ from gi.repository import GLib
 
 from .capture_selection import AreaSelection, picker
 from .screencast import ScreenCast
-from .util import save_png
+from .util import log, save_png
 
 
 class NativeCapture:
@@ -15,7 +15,8 @@ class NativeCapture:
         self._on_cancel = on_cancel
         self._on_error = on_error
         self._selection = None
-        self._cast = ScreenCast(self._snapshot, self._cancel, self._failed, reselect=reselect)
+        self._cast = ScreenCast(self._snapshot, self._cancel, self._failed, reselect=reselect,
+                                nudge=picker.nudge)
         self.started = time.monotonic()
         self.finished = False
 
@@ -33,6 +34,7 @@ class NativeCapture:
     def _snapshot(self, snapshot):
         if self.finished:
             return
+        log(f"capture: 화면 받음 ({(time.monotonic() - self.started) * 1000:.0f}ms) → 선택 화면 표시")
         try:
             self._selection = AreaSelection(snapshot, self._selected, self._cancel, self._failed)
             self._selection.show()

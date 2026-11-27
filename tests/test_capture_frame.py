@@ -112,6 +112,58 @@ class SnapshotTest(unittest.TestCase):
                               lambda n: "appsrc ! appsink name=frame", timeout=True)
         self.assertIn("초과", errors[0])
 
+    def test_static_monitor_is_nudged_until_its_frame_arrives(self):
+        # GNOME sends no frame for a monitor whose contents never change. The
+        # reader must poke only the monitors that are still missing.
+        loop, values, errors, ready, error = callback_loop()
+        fd = os.open(os.devnull, os.O_RDONLY)
+        static = []
+        nudged = []
+
+        def make(gst, remote_fd, node):
+            if node == 42:
+                return Gst.parse_launch(self.pattern(node))
+            pipeline = Gst.parse_launch(
+                "appsrc name=src caps=video/x-raw,format=RGB,width=4,height=4,framerate=0/1 ! "
+                "appsink name=frame sync=false")
+            static.append(pipeline)
+            return pipeline
+
+        def nudge(regions):
+            nudged.append(list(regions))
+            if len(nudged) == 2:  # the compositor repaints only after being poked
+                static[0].get_by_name("src").emit("push-buffer", Gst.Buffer.new_wrapped(bytes(48)))
+
+        with patch.object(frame, "monitor_layout", return_value=[LEFT, RIGHT]), \
+             patch.object(frame, "_pipeline", side_effect=make), \
+             patch.object(frame, "NUDGE_FIRST", 0.01), patch.object(frame, "NUDGE_EVERY", 0.02):
+            reader = frame.read_snapshot(
+                fd, [(42, {"position": LEFT[:2]}), (43, {"position": RIGHT[:2]})], ready, error, nudge)
+            guard = GLib.timeout_add_seconds(3, loop.quit)
+            loop.run()
+            GLib.source_remove(guard)
+            reader.cancel()
+        self.assertFalse(errors)
+        self.assertEqual(len(values), 1)
+        self.assertGreaterEqual(len(nudged), 2)
+        self.assertTrue(all(regions == [RIGHT] for regions in nudged))
+
+    def test_failing_nudge_does_not_break_the_read(self):
+        loop, values, errors, ready, error = callback_loop()
+        fd = os.open(os.devnull, os.O_RDONLY)
+        with patch.object(frame, "monitor_layout", return_value=[LEFT, RIGHT]), \
+             patch.object(frame, "_pipeline", side_effect=lambda g, f, n: Gst.parse_launch("appsrc ! appsink name=frame")), \
+             patch.object(frame, "NUDGE_FIRST", 0.0), patch.object(frame, "NUDGE_EVERY", 0.01):
+            reader = frame.read_snapshot(fd, [(43, {"position": RIGHT[:2]})], ready, error,
+                                         Mock(side_effect=OSError("helper gone")))
+            reader.deadline = __import__("time").monotonic() + 0.15
+            guard = GLib.timeout_add_seconds(3, loop.quit)
+            loop.run()
+            GLib.source_remove(guard)
+            reader.cancel()
+        self.assertFalse(values)
+        self.assertIn("초과", errors[0])
+
     def test_cancel_before_idle(self):
         fd = os.open(os.devnull, os.O_RDONLY)
         ready = Mock()

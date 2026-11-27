@@ -2,7 +2,7 @@
 
 import socket
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from chalkak import picker_ipc
 from chalkak.capture_selection import PickerConnection
@@ -55,6 +55,31 @@ class PickerConnectionTest(unittest.TestCase):
         self.read()
         self.active.cancelled.assert_called_once_with()
         self.active.selected.assert_not_called()
+
+    def test_nudge_names_only_the_requested_monitors(self):
+        monitors = []
+        for name, (x, y, w, h) in (("DP-3", (0, 0, 3840, 2160)), ("HDMI-1", (3840, 0, 3840, 2160))):
+            monitor = Mock()
+            monitor.get_connector.return_value = name
+            monitor.get_geometry.return_value = Mock(x=x, y=y, width=w, height=h)
+            monitors.append(monitor)
+        with patch("chalkak.capture_selection.Gdk.Display.get_default") as display:
+            display.return_value.get_monitors.return_value = monitors
+            self.client.nudge([(0, 0, 3840, 2160)])
+            self.client.nudge([(9, 9, 1, 1)])  # unknown region: nothing to send
+        message, fd = picker_ipc.receive(self.helper)
+        self.assertIsNone(fd)
+        self.assertEqual(message, {"command": "nudge", "id": 2,
+                                   "monitors": [["DP-3", [0, 0, 3840, 2160]]],
+                                   "layout": [[0, 0, 3840, 2160], [3840, 0, 3840, 2160]]})
+        with self.assertRaises(TimeoutError):
+            self.helper.recv(1)
+
+    def test_nudge_without_helper_is_ignored(self):
+        self.client.sock.close()
+        self.client.sock = None
+        self.client.nudge([(0, 0, 1, 1)])
+        self.client.sock = socket.socket()  # for the cleanup registered in setUp
 
     def test_abandon_only_closes_its_own_grab(self):
         self.client.close(Mock())

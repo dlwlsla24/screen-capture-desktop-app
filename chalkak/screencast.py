@@ -37,10 +37,11 @@ def _active_monitors(bus):
 
 
 class ScreenCast:
-    def __init__(self, ready, cancelled, error, *, reselect=False):
+    def __init__(self, ready, cancelled, error, *, reselect=False, nudge=None):
         self.ready = ready
         self.cancelled = cancelled
         self.error = error
+        self.nudge = nudge  # nudge(regions): 멈춰 있는 모니터를 다시 그리게 한다 (capture_frame 참고)
         self.token_path = Path(GLib.get_user_state_dir(), "chalkak", "screencast-restore-token")
         self.bus = None
         self.session = None
@@ -234,7 +235,8 @@ class ScreenCast:
             index, = reply.unpack()
             reader = read_snapshot(fds.get(index), streams,
                                    lambda pixbuf: self._finish(self.ready, pixbuf),
-                                   lambda reason: self._finish(self.error, str(reason)))
+                                   lambda reason: self._finish(self.error, str(reason)),
+                                   nudge=self.nudge)
             if self.closed:
                 reader.cancel()
             else:

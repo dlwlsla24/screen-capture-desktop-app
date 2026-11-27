@@ -63,6 +63,7 @@ class Picker:
         self.image = self.origin = self.end = None
         self.keys = None
         self.grabbed = False
+        self.serial = 0
 
     def command(self, _fd, _condition):
         try:
@@ -80,6 +81,8 @@ class Picker:
                     data, GdkPixbuf.Colorspace.RGB, message["alpha"], 8,
                     message["width"], message["height"], message["stride"])
                 self.show(message["monitors"], message["layout"])
+            elif message["command"] == "nudge":
+                self.nudge(message["monitors"], message["layout"])
             elif message["id"] == self.serial:
                 self.close()
         except Exception as exc:
@@ -89,10 +92,30 @@ class Picker:
                 os.close(fd)
         return GLib.SOURCE_CONTINUE
 
+    def available(self):
+        screen = self.display.get_default_screen()
+        return [(screen.get_monitor_plug_name(i), geometry(self.display.get_monitor(i)))
+                for i in range(self.display.get_n_monitors())]
+
+    def nudge(self, monitors, layout):
+        """멈춰 있는 모니터를 다시 그리게 한다: 완전히 투명한 1픽셀 창을 띄웠다가 곧 없앤다."""
+        visual = self.display.get_default_screen().get_rgba_visual()
+        if visual is None:
+            return  # 투명하게 못 만들면 화면에 점이 찍히므로 하지 않는다
+        for x, y, _w, _h in match_outputs(monitors, layout, self.available()):
+            pixel = Gtk.Window(type=Gtk.WindowType.POPUP)
+            pixel.set_visual(visual)
+            pixel.set_app_paintable(True)
+            pixel.set_accept_focus(False)
+            pixel.set_default_size(1, 1)
+            pixel.move(x, y)
+            pixel.show()
+            GLib.timeout_add(50, lambda window=pixel: window.destroy() and False)
+        self.display.flush()
+
     def show(self, monitors, layout):
         screen = self.display.get_default_screen()
-        available = [(screen.get_monitor_plug_name(i), geometry(self.display.get_monitor(i)))
-                     for i in range(self.display.get_n_monitors())]
+        available = self.available()
         self.regions = [tuple(region) for _, region in monitors]
         outputs = match_outputs(monitors, layout, available)
         self.outputs = list(zip(outputs, self.regions))
